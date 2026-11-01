@@ -4,7 +4,7 @@
 #   docker build -f docker/Dockerfile -t security-toolkit .
 #   docker build -f docker/Dockerfile --build-arg WITH_DOTNET=true -t security-toolkit:dotnet .
 #   docker run --rm -v "$PWD:/src" security-toolkit [--fail-on high] [--skip trivy]
-FROM python:3.12-slim-bookworm
+FROM python:3.15-slim-bookworm
 
 ARG WITH_DOTNET=false
 # Boş bırakılırsa derleme anındaki en son sürümler kurulur; tekrarlanabilir imaj için sabitleyin.
