@@ -11,13 +11,13 @@ minimum_pre_commit_version: "3.2.0"
 repos:
   # Sızdırılmış sırlar (API anahtarı, token, parola) — yalnızca commit'lenen değişikliklere bakar
   - repo: https://github.com/gitleaks/gitleaks
-    rev: v8.24.0
+    rev: v8.30.0
     hooks:
       - id: gitleaks
 
   # Genel hijyen: özel anahtarlar, birleştirme çakışmaları, büyük dosyalar
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
+    rev: v6.0.0
     hooks:
       - id: detect-private-key
       - id: check-merge-conflict
