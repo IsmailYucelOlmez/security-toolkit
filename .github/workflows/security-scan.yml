@@ -122,7 +122,7 @@ jobs:
 
       - name: Araç önbelleği
         id: cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ env.SECURITY_TOOLS_DIR }}
           # Haftalık anahtar: ikili araçlar en geç bir hafta içinde güncellenir
