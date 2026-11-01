@@ -1,0 +1,41 @@
+# security-toolkit şablonundan üretildi — değiştirmek için `copier update` kullanın.
+name: security
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: security-{% raw %}${{ github.ref }}{% endraw %}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    uses: {{ github_owner }}/security-toolkit/.github/workflows/security-scan.yml@{{ toolkit_ref }}
+    permissions:
+      contents: read
+      pull-requests: write
+      security-events: write
+    with:
+      fail-on: {{ fail_on }}
+      toolkit-ref: {{ toolkit_ref }}
+{%- if upload_sarif %}
+      upload-sarif: true
+{%- endif %}
+    secrets: inherit
+{%- if defectdojo %}
+
+  defectdojo:
+    needs: scan
+    if: always() && github.ref == 'refs/heads/main'
+    uses: {{ github_owner }}/security-toolkit/.github/workflows/defectdojo-upload.yml@{{ toolkit_ref }}
+    with:
+      product-name: {{ project_name }}
+      engagement-name: CI
+      toolkit-ref: {{ toolkit_ref }}
+    secrets: inherit
+{%- endif %}

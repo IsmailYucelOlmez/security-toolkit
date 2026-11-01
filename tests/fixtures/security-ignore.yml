@@ -1,0 +1,9 @@
+- id: B403
+  path: backend/*
+  reason: iç önbellek
+- id: CVE-2020-14343
+  reason: kullanılmayan yol
+  expires: 2999-01-01
+- id: fastapi-debug-enabled
+  reason: süresi dolmuş
+  expires: 2000-01-01

@@ -1,0 +1,1 @@
+[{"Description":"Google API Key","StartLine":3,"EndLine":3,"File":"mobile/lib/api.dart","RuleID":"gcp-api-key","Commit":"a1b2c3d4e5f6a7b8","Secret":"REDACTED","Match":"REDACTED","Fingerprint":"a1b2c3d4e5f6a7b8:mobile/lib/api.dart:gcp-api-key:3"}]

@@ -1,0 +1,29 @@
+# Projede .github/workflows/security.yml olarak kaydedin.
+# OWNER kısmını kendi GitHub kullanıcı/organizasyon adınızla değiştirin.
+name: security
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 3 * * 1"   # her pazartesi 06:17 (TR) — tüm commit geçmişinde sır taraması
+  workflow_dispatch:
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    uses: OWNER/security-toolkit/.github/workflows/security-scan.yml@main
+    permissions:
+      contents: read
+      pull-requests: write
+      security-events: write
+    with:
+      fail-on: high
+      # path: backend          # monorepo'da yalnızca bir alt dizini taramak için
+      # skip: trivy
+      # upload-sarif: true     # public repo veya GitHub Advanced Security varsa
+    secrets: inherit

@@ -1,0 +1,4 @@
+security-reports/
+__pycache__/
+*.pyc
+.security-tools/

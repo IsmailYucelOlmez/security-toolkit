@@ -1,0 +1,2 @@
+{"results":[{"check_id":"rules.semgrep.jwt-decode-without-verification","path":"backend/app/auth.py","start":{"line":12},"extra":{"message":"JWT imza doğrulaması kapatılmış","severity":"ERROR","metadata":{"cwe":["CWE-347: x"],"impact":"HIGH","confidence":"HIGH"}}},
+{"check_id":"rules.semgrep.fastapi-debug-enabled","path":"backend/app/main.py","start":{"line":3},"extra":{"message":"debug","severity":"WARNING","metadata":{}}}],"errors":[]}

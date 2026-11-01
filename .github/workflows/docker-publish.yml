@@ -1,0 +1,67 @@
+# Docker imajını GHCR'ye yayınlar:
+#   ghcr.io/<sahip>/security-toolkit:latest   (Python, Flutter, Docker projeleri)
+#   ghcr.io/<sahip>/security-toolkit:dotnet   (+ .NET SDK, C# projeleri için)
+name: docker-publish
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths: [docker/**, scripts/**, rules/**, .github/workflows/docker-publish.yml]
+  schedule:
+    - cron: "0 4 * * 0"   # haftalık: araçların yeni sürümleri imaja girsin
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      matrix:
+        variant:
+          - {name: default, dotnet: "false", suffix: ""}
+          - {name: dotnet, dotnet: "true", suffix: "-dotnet"}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/security-toolkit
+          flavor: suffix=${{ matrix.variant.suffix }},onlatest=true
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=dotnet,enable=${{ matrix.variant.name == 'dotnet' && github.ref == 'refs/heads/main' }},suffix=
+            type=semver,pattern={{version}}
+            type=sha,format=short
+
+      - name: Derle ve yayınla
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          build-args: WITH_DOTNET=${{ matrix.variant.dotnet }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.variant.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.variant.name }}
+
+      - name: Duman testi
+        run: |
+          img="ghcr.io/${{ github.repository_owner }}/security-toolkit:sha-$(git rev-parse --short HEAD)${{ matrix.variant.suffix }}"
+          mkdir -p /tmp/smoke && echo 'import pickle' > /tmp/smoke/a.py
+          docker run --rm -v /tmp/smoke:/src "$img" --fail-on none
+          test -f /tmp/smoke/security-reports/findings.json

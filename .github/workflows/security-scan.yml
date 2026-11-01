@@ -1,0 +1,165 @@
+# Yeniden kullanılabilir güvenlik taraması.
+# Projelerden çağırmak için: examples/security.yml
+name: security-scan
+
+on:
+  workflow_call:
+    inputs:
+      fail-on:
+        description: "Bu derece ve üstünde bulgu varsa iş başarısız olur (critical|high|medium|low|none)"
+        type: string
+        default: high
+      path:
+        description: "Taranacak alt dizin (monorepo için)"
+        type: string
+        default: "."
+      skip:
+        description: "Atlanacak araçlar, virgülle (gitleaks,osv,pip-audit,bandit,semgrep,trivy,dotnet)"
+        type: string
+        default: ""
+      semgrep-config:
+        description: "Semgrep kural seti"
+        type: string
+        default: p/default
+      upload-sarif:
+        description: "Sonuçları GitHub Code Scanning'e yükle (public repo veya GHAS gerekir)"
+        type: boolean
+        default: false
+      comment-on-pr:
+        description: "PR'a özet yorumu yaz/güncelle"
+        type: boolean
+        default: true
+      toolkit-repository:
+        description: "Toolkit reposu (boşsa <sahip>/security-toolkit)"
+        type: string
+        default: ""
+      toolkit-ref:
+        description: "Toolkit dalı/etiketi"
+        type: string
+        default: main
+    secrets:
+      TOOLKIT_TOKEN:
+        description: "Toolkit reposu private ise okuma yetkili token"
+        required: false
+    outputs:
+      failed:
+        description: "Eşik aşıldıysa 'true'"
+        value: ${{ jobs.scan.outputs.failed }}
+
+jobs:
+  scan:
+    name: Güvenlik taraması
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+      security-events: write
+    outputs:
+      failed: ${{ steps.scan.outputs.failed }}
+    env:
+      SECURITY_TOOLS_DIR: ${{ github.workspace }}/.security-tools
+      SEMGREP_CONFIG: ${{ inputs.semgrep-config }}
+    steps:
+      - name: Projeyi al
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0   # gitleaks'in PR commit aralığını görebilmesi için
+
+      - name: Toolkit'i al
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ inputs.toolkit-repository || format('{0}/security-toolkit', github.repository_owner) }}
+          ref: ${{ inputs.toolkit-ref }}
+          path: .security-toolkit
+          token: ${{ secrets.TOOLKIT_TOKEN || github.token }}
+          persist-credentials: false
+
+      - name: Yığını algıla
+        id: detect
+        shell: bash
+        run: |
+          if find "${{ inputs.path }}" -name '*.csproj' -not -path '*/.security-toolkit/*' | grep -q .; then
+            echo "dotnet=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: .NET SDK
+        if: steps.detect.outputs.dotnet == 'true' && !contains(inputs.skip, 'dotnet')
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Araç önbelleği
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.SECURITY_TOOLS_DIR }}
+          # Haftalık anahtar: ikili araçlar en geç bir hafta içinde güncellenir
+          key: security-tools-${{ runner.os }}-${{ steps.detect.outputs.week }}-${{ hashFiles('.security-toolkit/scripts/requirements-tools.txt') }}
+
+      - name: Araçları kur
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: bash .security-toolkit/scripts/install-tools.sh
+
+      - name: PATH
+        run: echo "$SECURITY_TOOLS_DIR/bin" >> "$GITHUB_PATH"
+
+      - name: Tara
+        id: scan
+        shell: bash
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          args=(--path "${{ inputs.path }}" --out "$GITHUB_WORKSPACE/security-reports" --fail-on "${{ inputs.fail-on }}")
+          [[ -n "${{ inputs.skip }}" ]] && args+=(--skip "${{ inputs.skip }}")
+          # PR'larda sır taraması yalnızca yeni commit'lere bakar (geçmiş, push/schedule taramasında taranır)
+          [[ -n "$BASE_REF" ]] && args+=(--diff-base "origin/$BASE_REF")
+          set +e
+          bash .security-toolkit/scripts/scan.sh "${args[@]}"
+          rc=$?
+          set -e
+          [[ $rc -eq 1 ]] && echo "failed=true" >> "$GITHUB_OUTPUT" || echo "failed=false" >> "$GITHUB_OUTPUT"
+          [[ $rc -gt 1 ]] && exit $rc || true
+
+      - name: Raporları yükle
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: security-reports
+          path: security-reports/
+          retention-days: 30
+
+      - name: Code Scanning'e yükle
+        if: always() && inputs.upload-sarif && hashFiles('security-reports/findings.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: security-reports/findings.sarif
+          category: security-toolkit
+
+      - name: PR yorumu
+        if: always() && inputs.comment-on-pr && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && hashFiles('security-reports/summary.md') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          marker="<!-- security-toolkit -->"
+          { echo "$marker"; cat security-reports/summary.md; echo; echo "[Tüm raporlar]($RUN_URL)"; } > comment.md
+          id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+               --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | tail -1)
+          if [[ -n "$id" ]]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@comment.md >/dev/null
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -F body=@comment.md >/dev/null
+          fi
+
+      - name: Eşik kontrolü
+        if: steps.scan.outputs.failed == 'true'
+        run: |
+          echo "::error::'${{ inputs.fail-on }}' veya üstü derecede güvenlik bulgusu var. Ayrıntılar iş özetinde."
+          exit 1

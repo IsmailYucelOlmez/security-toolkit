@@ -1,0 +1,72 @@
+rules:
+  # ------------------------------------------------------------------ Flutter / Dart
+  - id: dart-cleartext-http
+    languages: [generic]
+    paths: {include: ["*.dart"]}
+    severity: WARNING
+    message: >-
+      Şifresiz HTTP adresi. Trafik ağda okunabilir ve değiştirilebilir; HTTPS kullanın.
+      (Yerel geliştirme adresleri bu kuraldan muaftır.)
+    metadata: {cwe: ['CWE-319: Cleartext Transmission of Sensitive Information'], category: security, confidence: MEDIUM, impact: MEDIUM}
+    patterns:
+      - pattern-regex: "['\"]http://(?!localhost|127\\.0\\.0\\.1|10\\.0\\.2\\.2|0\\.0\\.0\\.0)[^'\"]+['\"]"
+
+  - id: dart-secret-in-shared-preferences
+    languages: [generic]
+    paths: {include: ["*.dart"]}
+    severity: WARNING
+    message: >-
+      Token/parola SharedPreferences'a düz metin olarak yazılıyor. flutter_secure_storage
+      (Keychain / Android Keystore) kullanın.
+    metadata: {cwe: ['CWE-312: Cleartext Storage of Sensitive Information'], category: security, confidence: MEDIUM, impact: MEDIUM}
+    pattern-regex: "\\.setString\\(\\s*['\"][^'\"]*(?i:token|password|parola|secret|api_?key)[^'\"]*['\"]"
+
+  - id: dart-hardcoded-api-key
+    languages: [generic]
+    paths: {include: ["*.dart"]}
+    severity: ERROR
+    message: >-
+      API anahtarı uygulama koduna gömülü. Derlenmiş APK/IPA'dan kolayca çıkarılır; anahtarı
+      backend'de tutun veya --dart-define ile derleme zamanında verin.
+    metadata: {cwe: ['CWE-798: Use of Hard-coded Credentials'], category: security, confidence: MEDIUM, impact: HIGH}
+    pattern-regex: "(?i)(api_?key|secret|token)\\w*\\s*=\\s*['\"][A-Za-z0-9_\\-]{20,}['\"]"
+
+  - id: dart-bad-certificate-callback
+    languages: [generic]
+    paths: {include: ["*.dart"]}
+    severity: ERROR
+    message: TLS sertifika doğrulaması devre dışı bırakılıyor; araya girme (MITM) saldırısına açık.
+    metadata: {cwe: ['CWE-295: Improper Certificate Validation'], category: security, confidence: HIGH, impact: HIGH}
+    pattern-regex: "badCertificateCallback\\s*=\\s*\\([^)]*\\)\\s*=>\\s*true"
+
+  # ------------------------------------------------------------------ C# / .NET
+  - id: csharp-sql-string-concat
+    languages: [csharp]
+    severity: ERROR
+    message: SQL komutu metin birleştirme/enterpolasyon ile kuruluyor (SQL injection). SqlParameter kullanın.
+    metadata: {cwe: ['CWE-89: SQL Injection'], category: security, confidence: HIGH, impact: HIGH}
+    patterns:
+      - pattern-either:
+          - pattern: new SqlCommand($Q, ...)
+          - pattern: new SqlCommand($Q)
+          - pattern: $CMD.CommandText = $Q;
+      - metavariable-pattern:
+          metavariable: $Q
+          pattern-either:
+            - pattern: $"..."
+            - pattern: |
+                "..." + $X
+            - pattern: |
+                $X + "..."
+            - pattern: string.Format(...)
+            - pattern: String.Format(...)
+
+  - id: csharp-hardcoded-connection-string-password
+    languages: [generic]
+    paths: {include: ["*.cs", "*.config", "appsettings*.json"]}
+    severity: ERROR
+    message: >-
+      Bağlantı cümlesinde parola açık yazılmış. Windows kimlik doğrulaması (Integrated Security),
+      kullanıcı gizli anahtarları veya ortam değişkeni kullanın.
+    metadata: {cwe: ['CWE-798: Use of Hard-coded Credentials'], category: security, confidence: MEDIUM, impact: HIGH}
+    pattern-regex: "(?i)(password|pwd)\\s*=\\s*(?!\\s*;)(?!\\{)[^;\"'<>]{3,};"

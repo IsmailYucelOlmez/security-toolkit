@@ -1,0 +1,2 @@
+{"results":[{"filename":"backend/app/main.py","line_number":5,"issue_severity":"HIGH","issue_confidence":"LOW","issue_text":"t","test_id":"B602","test_name":"subprocess","more_info":"","issue_cwe":{"id":78}},
+{"filename":"backend/app/cache.py","line_number":1,"issue_severity":"LOW","issue_confidence":"HIGH","issue_text":"pickle","test_id":"B403","test_name":"blacklist","more_info":""}]}

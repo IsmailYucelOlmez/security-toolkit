@@ -1,0 +1,46 @@
+# Ortak pre-commit yapılandırması — commit anında hızlı güvenlik kontrolleri.
+# Kurulum:  pip install pre-commit && pre-commit install
+# Sürümleri güncellemek için:  pre-commit autoupdate
+# Tüm repoyu bir kez taramak için:  pre-commit run --all-files
+#
+# Yanlış pozitifleri satır içinde bastırın:
+#   gitleaks:  satır sonuna  # gitleaks:allow
+#   bandit:    satır sonuna  # nosec B105
+minimum_pre_commit_version: "3.2.0"
+
+repos:
+  # Sızdırılmış sırlar (API anahtarı, token, parola) — yalnızca commit'lenen değişikliklere bakar
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.24.0
+    hooks:
+      - id: gitleaks
+
+  # Genel hijyen: özel anahtarlar, birleştirme çakışmaları, büyük dosyalar
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: detect-private-key
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: check-json
+
+  # Python statik analiz — orta ve üstü derece + orta ve üstü güven (gürültüyü azaltmak için)
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.9.4
+    hooks:
+      - id: bandit
+        args: [-ll, -ii, --quiet]
+        exclude: ^(tests?/|.*/tests?/)
+
+  # Ortam ve sertifika dosyalarının commit'lenmesini engelle
+  - repo: local
+    hooks:
+      - id: forbid-env-files
+        name: .env / anahtar dosyaları commit'lenemez
+        language: fail
+        entry: "Bu dosya gizli bilgi içerebilir; .gitignore'a ekleyin (örnek için .env.example kullanın):"
+        files: '(^|/)(\.env(\.[^/]*)?|.*\.(pem|p12|pfx|jks|keystore)|google-services\.json|GoogleService-Info\.plist|key\.properties)$'
+        exclude: '(^|/)\.env\.(example|sample|template)$'

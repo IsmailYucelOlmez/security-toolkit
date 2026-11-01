@@ -1,0 +1,103 @@
+# Güvenlik yapılandırmasını bir projeye uygular.
+#
+#   Yeni veya mevcut proje:  copier copy gh:OWNER/security-toolkit . --trust
+#   Şablon değişince:        copier update --trust
+#
+# Şablon dosyaları template/project altındadır.
+_min_copier_version: "9.3.0"
+_subdirectory: template/project
+_answers_file: .security-toolkit-answers.yml
+_skip_if_exists:
+  - .security-ignore.yml   # projeye özgü bastırmalar güncellemede ezilmez
+_message_after_copy: |
+  Güvenlik yapılandırması eklendi. Sonraki adımlar:
+    1. pip install pre-commit && pre-commit install
+    2. pre-commit run --all-files     (mevcut kodu bir kez kontrol et)
+    3. Değişiklikleri commit'leyip push'la; ilk tarama Actions sekmesinde çalışır.
+  {%- if deep_scan %}
+    4. Derin tarama için repo Settings > Secrets bölümüne STRIX_LLM ve LLM_API_KEY ekleyin
+       (DefectDojo kullanıyorsanız DEFECTDOJO_URL ve DEFECTDOJO_TOKEN da).
+  {%- endif %}
+
+github_owner:
+  type: str
+  help: security-toolkit reposunun sahibi (GitHub kullanıcı veya organizasyon adı)
+  validator: "{% if not github_owner %}Zorunlu alan{% endif %}"
+
+toolkit_ref:
+  type: str
+  help: Kullanılacak toolkit dalı veya etiketi (kararlılık için etiket önerilir, ör. v1)
+  default: main
+
+project_name:
+  type: str
+  help: Proje adı (raporlarda ve DefectDojo'da görünür)
+  default: "{{ _folder_name if _folder_name is defined else 'proje' }}"
+
+stacks:
+  type: str
+  help: Projede hangi yığınlar var?
+  multiselect: true
+  choices:
+    Python / FastAPI: python
+    Flutter / Dart: flutter
+    C# / .NET: dotnet
+    Docker: docker
+  default: [python]
+
+python_dir:
+  type: str
+  help: Python bağımlılık dosyalarının bulunduğu dizin (Dependabot için)
+  default: /
+  when: "{{ 'python' in stacks }}"
+
+flutter_dir:
+  type: str
+  help: pubspec.yaml dizini
+  default: /
+  when: "{{ 'flutter' in stacks }}"
+
+dotnet_dir:
+  type: str
+  help: .sln/.csproj dizini
+  default: /
+  when: "{{ 'dotnet' in stacks }}"
+
+docker_dir:
+  type: str
+  help: Dockerfile dizini
+  default: /
+  when: "{{ 'docker' in stacks }}"
+
+fail_on:
+  type: str
+  help: PR hangi dereceden itibaren başarısız sayılsın?
+  choices: [critical, high, medium, low, none]
+  default: high
+
+upload_sarif:
+  type: bool
+  help: Bulgular GitHub Security sekmesine yüklensin mi? (public repo veya GitHub Advanced Security gerekir)
+  default: false
+
+deep_scan:
+  type: bool
+  help: Haftalık derin tarama (Schemathesis, ZAP, Strix, MobSF) eklensin mi?
+  default: false
+
+api_openapi_url:
+  type: str
+  help: Staging API'nin OpenAPI şema adresi (ör. https://staging-api.ornek.com/openapi.json)
+  default: ""
+  when: "{{ deep_scan }}"
+
+api_base_url:
+  type: str
+  help: Staging API taban adresi (boşsa şemadaki adres kullanılır)
+  default: ""
+  when: "{{ deep_scan }}"
+
+defectdojo:
+  type: bool
+  help: Sonuçlar DefectDojo'ya yüklensin mi?
+  default: false

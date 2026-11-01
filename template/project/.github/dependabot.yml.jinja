@@ -1,0 +1,30 @@
+# security-toolkit şablonundan üretildi.
+# Güvenlik güncellemeleri Settings > Code security > Dependabot security updates ile de açılmalı.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: {interval: weekly}
+{%- if 'python' in stacks %}
+  - package-ecosystem: pip
+    directory: {{ python_dir }}
+    schedule: {interval: weekly}
+    groups:
+      python-minor:
+        update-types: [minor, patch]
+{%- endif %}
+{%- if 'flutter' in stacks %}
+  - package-ecosystem: pub
+    directory: {{ flutter_dir }}
+    schedule: {interval: weekly}
+{%- endif %}
+{%- if 'dotnet' in stacks %}
+  - package-ecosystem: nuget
+    directory: {{ dotnet_dir }}
+    schedule: {interval: weekly}
+{%- endif %}
+{%- if 'docker' in stacks %}
+  - package-ecosystem: docker
+    directory: {{ docker_dir }}
+    schedule: {interval: weekly}
+{%- endif %}

@@ -1,0 +1,291 @@
+# Haftalık / sürüm öncesi derin tarama. Çalışan bir STAGING ortamına saldırı trafiği gönderir;
+# yalnızca sahibi olduğunuz veya yazılı izniniz olan hedeflerde kullanın.
+#
+# İşler (her biri girdisi verilirse çalışır):
+#   schemathesis  OpenAPI şemasından binlerce uç durum isteği (500 hataları, şema ihlalleri)
+#   zap           OWASP ZAP API taraması (şema varsa) veya pasif baseline taraması
+#   strix         Kaynak kod + canlı adres üzerinde AI pentest
+#   mobsf         Flutter APK'sını derleyip MobSF ile statik analiz
+#
+# Repo secrets:
+#   API_AUTH_HEADER                 isteğe bağlı, ör. "Bearer eyJ..." (test kullanıcısının token'ı)
+#   STRIX_LLM, LLM_API_KEY          strix için
+#   DEFECTDOJO_URL, DEFECTDOJO_TOKEN isteğe bağlı
+name: deep-scan
+
+on:
+  workflow_call:
+    inputs:
+      authorized:
+        description: "Hedefin sahibi olduğunuzu / yazılı izniniz olduğunu onaylayın (true olmalı)"
+        type: boolean
+        required: true
+      openapi-url:
+        description: "OpenAPI şema adresi (ör. https://staging-api.ornek.com/openapi.json)"
+        type: string
+        default: ""
+      base-url:
+        description: "API veya web uygulaması taban adresi"
+        type: string
+        default: ""
+      schemathesis-max-time:
+        description: "Schemathesis süre bütçesi (saniye)"
+        type: number
+        default: 600
+      zap:
+        type: boolean
+        default: true
+      strix:
+        type: boolean
+        default: false
+      strix-scan-mode:
+        type: string
+        default: quick
+      flutter-dir:
+        description: "Flutter projesinin dizini (boşsa MobSF çalışmaz)"
+        type: string
+        default: ""
+      product-name:
+        description: "DefectDojo ürün adı (boşsa yükleme yapılmaz)"
+        type: string
+        default: ""
+      toolkit-repository:
+        type: string
+        default: ""
+      toolkit-ref:
+        type: string
+        default: main
+    secrets:
+      API_AUTH_HEADER:
+        required: false
+      STRIX_LLM:
+        required: false
+      LLM_API_KEY:
+        required: false
+      DEFECTDOJO_URL:
+        required: false
+      DEFECTDOJO_TOKEN:
+        required: false
+      TOOLKIT_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Yetki onayı
+        if: ${{ !inputs.authorized }}
+        run: |
+          echo "::error::Derin tarama hedefe saldırı trafiği gönderir. Çağıran workflow'da 'authorized: true' verin (yalnızca kendi staging ortamınız için)."
+          exit 1
+      - name: Hedef kontrolü
+        env:
+          TARGETS: ${{ inputs.openapi-url }} ${{ inputs.base-url }}
+        run: |
+          for t in $TARGETS; do
+            if [[ ! "$t" =~ (staging|stage|test|dev|preview|localhost|127\.0\.0\.1) ]]; then
+              echo "::warning::'$t' bir test ortamı adresine benzemiyor. Canlı (production) sistemi taramadığınızdan emin olun."
+            fi
+          done
+
+  schemathesis:
+    needs: guard
+    if: inputs.openapi-url != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install -q "schemathesis>=4,<5"
+      - name: Schemathesis
+        env:
+          AUTH: ${{ secrets.API_AUTH_HEADER }}
+          OPENAPI: ${{ inputs.openapi-url }}
+          BASE: ${{ inputs.base-url }}
+          MAX_TIME: ${{ inputs.schemathesis-max-time }}
+        run: |
+          args=("$OPENAPI" --checks all --max-time "$MAX_TIME" --wait-for-schema 60
+                --report "junit,har" --report-dir deep-reports/schemathesis)
+          [[ -n "$BASE" ]] && args+=(--url "$BASE")
+          [[ -n "$AUTH" ]] && args+=(-H "Authorization: $AUTH")
+          set +e; schemathesis run "${args[@]}"; rc=$?; set -e
+          python3 - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import glob, xml.etree.ElementTree as ET
+          files = glob.glob("deep-reports/schemathesis/*.xml")
+          tests = failures = errors = 0
+          for f in files:
+              root = ET.parse(f).getroot()
+              for s in root.iter("testsuite"):
+                  tests += int(s.get("tests", 0)); failures += int(s.get("failures", 0)); errors += int(s.get("errors", 0))
+          print("## 🧪 Schemathesis\n")
+          print(f"İşlem sayısı: **{tests}** · başarısız: **{failures}** · hata: **{errors}**\n")
+          print("Başarısız durumların yeniden üretim adımları artifact içindeki JUnit raporunda.")
+          EOF
+          echo "Schemathesis çıkış kodu: $rc"
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: deep-schemathesis
+          path: deep-reports/
+
+  zap:
+    needs: guard
+    if: inputs.zap && (inputs.openapi-url != '' || inputs.base-url != '')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: OWASP ZAP
+        env:
+          ZAP_AUTH_HEADER_VALUE: ${{ secrets.API_AUTH_HEADER }}
+          OPENAPI: ${{ inputs.openapi-url }}
+          BASE: ${{ inputs.base-url }}
+        run: |
+          mkdir -p zap && chmod 777 zap
+          envs=()
+          [[ -n "$ZAP_AUTH_HEADER_VALUE" ]] && envs+=(-e ZAP_AUTH_HEADER_VALUE)
+          if [[ -n "$OPENAPI" ]]; then
+            # Şemadaki tüm uç noktalara aktif tarama
+            cmd=(zap-api-scan.py -t "$OPENAPI" -f openapi)
+            [[ -n "$BASE" ]] && cmd+=(-O "$BASE")
+          else
+            # Şema yoksa yalnızca pasif tarama (hedefe saldırı yükü gönderilmez)
+            cmd=(zap-baseline.py -t "$BASE")
+          fi
+          set +e
+          docker run --rm "${envs[@]}" -v "$PWD/zap:/zap/wrk:rw" ghcr.io/zaproxy/zaproxy:stable \
+            "${cmd[@]}" -J zap.json -x zap.xml -r zap.html -I
+          set -e
+          python3 - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import json, collections
+          risk = {"3": "🟠 Yüksek", "2": "🟡 Orta", "1": "🔵 Düşük", "0": "⚪ Bilgi"}
+          try:
+              data = json.load(open("zap/zap.json"))
+          except Exception as e:
+              print(f"## 🕷️ OWASP ZAP\n\nRapor okunamadı: {e}"); raise SystemExit
+          alerts = [a for s in data.get("site", []) for a in s.get("alerts", [])]
+          c = collections.Counter(a.get("riskcode") for a in alerts)
+          print("## 🕷️ OWASP ZAP\n")
+          print(" · ".join(f"{risk[k]}: **{c.get(k, 0)}**" for k in ("3", "2", "1", "0")) + "\n")
+          for a in sorted(alerts, key=lambda a: -int(a.get("riskcode", 0)))[:20]:
+              if a.get("riskcode") in ("3", "2"):
+                  print(f"- {risk[a['riskcode']]} — {a.get('name')} ({a.get('count', '?')} örnek)")
+          EOF
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: deep-zap
+          path: zap/
+
+  strix:
+    needs: guard
+    if: inputs.strix
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6
+      - name: Strix kur
+        run: curl -sSL https://strix.ai/install | bash
+      - name: Strix AI pentest
+        env:
+          STRIX_LLM: ${{ secrets.STRIX_LLM }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          BASE: ${{ inputs.base-url }}
+          MODE: ${{ inputs.strix-scan-mode }}
+        run: |
+          if [[ -z "$STRIX_LLM" || -z "$LLM_API_KEY" ]]; then
+            echo "::error::STRIX_LLM ve LLM_API_KEY secret'ları tanımlı değil."; exit 1
+          fi
+          export PATH="$HOME/.local/bin:$HOME/.strix/bin:$PATH"
+          targets=(-t ./)
+          [[ -n "$BASE" ]] && targets+=(-t "$BASE")
+          set +e; strix -n "${targets[@]}" --scan-mode "$MODE"; rc=$?; set -e
+          echo "## 🦉 Strix" >> "$GITHUB_STEP_SUMMARY"
+          if [[ $rc -eq 0 ]]; then echo "Doğrulanmış açık bulunmadı." >> "$GITHUB_STEP_SUMMARY"
+          else echo "Strix doğrulanmış bulgu raporladı (çıkış kodu $rc). Ayrıntılar \`deep-strix\` artifact'inde." >> "$GITHUB_STEP_SUMMARY"; fi
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: deep-strix
+          path: strix_runs/
+          if-no-files-found: ignore
+
+  mobsf:
+    needs: guard
+    if: inputs.flutter-dir != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      mobsf:
+        image: opensecurity/mobile-security-framework-mobsf:latest
+        ports: ["8000:8000"]
+        env:
+          MOBSF_API_KEY: ci-only-local-key   # yalnızca bu iş içinde, localhost'ta erişilebilir
+    env:
+      MOBSF_API_KEY: ci-only-local-key
+    steps:
+      - uses: actions/checkout@v6
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: APK derle
+        working-directory: ${{ inputs.flutter-dir }}
+        run: flutter pub get && flutter build apk --release
+      - name: MobSF analizi
+        working-directory: ${{ inputs.flutter-dir }}
+        run: |
+          for _ in $(seq 1 60); do curl -sf http://localhost:8000/ >/dev/null && break; sleep 5; done
+          apk=build/app/outputs/flutter-apk/app-release.apk
+          H=(-H "Authorization: $MOBSF_API_KEY")
+          hash=$(curl -sSf "${H[@]}" -F "file=@$apk" http://localhost:8000/api/v1/upload | python3 -c 'import sys,json;print(json.load(sys.stdin)["hash"])')
+          curl -sSf "${H[@]}" -X POST --data "hash=$hash" http://localhost:8000/api/v1/scan >/dev/null
+          mkdir -p "$GITHUB_WORKSPACE/deep-reports"
+          curl -sSf "${H[@]}" -X POST --data "hash=$hash" http://localhost:8000/api/v1/report_json -o "$GITHUB_WORKSPACE/deep-reports/mobsf.json"
+          curl -sSf "${H[@]}" -X POST --data "hash=$hash" http://localhost:8000/api/v1/scorecard -o "$GITHUB_WORKSPACE/deep-reports/mobsf-scorecard.json"
+          curl -sSf "${H[@]}" -X POST --data "hash=$hash" http://localhost:8000/api/v1/download_pdf -o "$GITHUB_WORKSPACE/deep-reports/mobsf.pdf" || true
+          python3 - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import json, os
+          s = json.load(open(os.path.join(os.environ["GITHUB_WORKSPACE"], "deep-reports/mobsf-scorecard.json")))
+          print("## 📱 MobSF\n")
+          print(f"Güvenlik puanı: **{s.get('security_score', '?')}/100** · yüksek: **{len(s.get('high', []))}** · uyarı: **{len(s.get('warning', []))}**\n")
+          for item in s.get("high", [])[:15]:
+              print(f"- 🟠 {item.get('title')} ({item.get('section', '')})")
+          EOF
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: deep-mobsf
+          path: deep-reports/
+          if-no-files-found: ignore
+
+  defectdojo:
+    needs: [zap, mobsf]
+    if: always() && inputs.product-name != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DEFECTDOJO_URL: ${{ secrets.DEFECTDOJO_URL }}
+      DEFECTDOJO_TOKEN: ${{ secrets.DEFECTDOJO_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+        if: env.DEFECTDOJO_URL != ''
+        with:
+          repository: ${{ inputs.toolkit-repository || format('{0}/security-toolkit', github.repository_owner) }}
+          ref: ${{ inputs.toolkit-ref }}
+          path: .security-toolkit
+          token: ${{ secrets.TOOLKIT_TOKEN || github.token }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v5
+        if: env.DEFECTDOJO_URL != ''
+        with:
+          pattern: deep-*
+          path: reports
+          merge-multiple: true
+      - name: DefectDojo'ya yükle
+        if: env.DEFECTDOJO_URL != ''
+        run: bash .security-toolkit/defectdojo/upload.sh reports --product "${{ inputs.product-name }}" --engagement "Derin tarama"

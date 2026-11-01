@@ -1,0 +1,31 @@
+name: selftest
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Şablondaki pre-commit kopyası güncel mi
+        run: diff -u pre-commit/.pre-commit-config.yaml template/project/.pre-commit-config.yaml
+      - name: Birim testleri
+        run: python -m unittest discover tests -v
+      - name: Kabuk betikleri
+        run: shellcheck -S warning scripts/*.sh docker/*.sh defectdojo/*.sh
+      - name: Semgrep kurallarını doğrula
+        run: |
+          pip install -q -r scripts/requirements-tools.txt
+          semgrep --validate --metrics=off --config rules/semgrep
+      - name: Araç kurulumu çalışıyor mu
+        run: bash scripts/install-tools.sh && ~/.security-tools/bin/gitleaks version && ~/.security-tools/bin/osv-scanner --version && ~/.security-tools/bin/trivy --version

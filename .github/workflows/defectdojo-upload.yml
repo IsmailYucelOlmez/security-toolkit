@@ -1,0 +1,55 @@
+# Aynı workflow çalışmasında üretilen rapor artifact'ini DefectDojo'ya yükler.
+# Repo secrets: DEFECTDOJO_URL, DEFECTDOJO_TOKEN
+name: defectdojo-upload
+
+on:
+  workflow_call:
+    inputs:
+      product-name:
+        type: string
+        required: true
+      engagement-name:
+        type: string
+        default: CI
+      artifact-name:
+        type: string
+        default: security-reports
+      toolkit-repository:
+        type: string
+        default: ""
+      toolkit-ref:
+        type: string
+        default: main
+    secrets:
+      DEFECTDOJO_URL:
+        required: true
+      DEFECTDOJO_TOKEN:
+        required: true
+      TOOLKIT_TOKEN:
+        required: false
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ inputs.toolkit-repository || format('{0}/security-toolkit', github.repository_owner) }}
+          ref: ${{ inputs.toolkit-ref }}
+          path: .security-toolkit
+          token: ${{ secrets.TOOLKIT_TOKEN || github.token }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v5
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: reports
+
+      - name: DefectDojo'ya yükle
+        env:
+          DEFECTDOJO_URL: ${{ secrets.DEFECTDOJO_URL }}
+          DEFECTDOJO_TOKEN: ${{ secrets.DEFECTDOJO_TOKEN }}
+        run: bash .security-toolkit/defectdojo/upload.sh reports --product "${{ inputs.product-name }}" --engagement "${{ inputs.engagement-name }}"

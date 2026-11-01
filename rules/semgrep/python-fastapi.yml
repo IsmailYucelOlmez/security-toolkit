@@ -1,0 +1,60 @@
+rules:
+  - id: fastapi-cors-wildcard-with-credentials
+    languages: [python]
+    severity: ERROR
+    message: >-
+      CORS tüm kaynaklara (*) açık ve kimlik bilgisiyle isteklere izin veriyor. Herhangi bir site
+      kullanıcının oturumuyla API'ye istek atabilir. allow_origins'e yalnızca kendi alan adlarınızı yazın.
+    metadata: {cwe: ['CWE-942: Permissive Cross-domain Policy'], category: security, confidence: HIGH, impact: HIGH}
+    patterns:
+      - pattern: $APP.add_middleware(CORSMiddleware, ..., allow_origins=["*"], ..., allow_credentials=True, ...)
+
+  - id: fastapi-debug-enabled
+    languages: [python]
+    severity: WARNING
+    message: FastAPI debug modu açık; hata sayfaları yığın izi ve iç ayrıntıları sızdırır. Ortam değişkeniyle yönetin.
+    metadata: {cwe: ['CWE-489: Active Debug Code'], category: security, confidence: HIGH, impact: MEDIUM}
+    pattern-either:
+      - pattern: FastAPI(..., debug=True, ...)
+      - pattern: uvicorn.run(..., debug=True, ...)
+
+  - id: jwt-decode-without-verification
+    languages: [python]
+    severity: ERROR
+    message: JWT imza doğrulaması kapatılmış; saldırgan istediği içerikle token üretebilir.
+    metadata: {cwe: ['CWE-347: Improper Verification of Cryptographic Signature'], category: security, confidence: HIGH, impact: HIGH}
+    pattern-either:
+      - pattern: |
+          jwt.decode(..., options={..., "verify_signature": False, ...}, ...)
+      - pattern: jwt.decode(..., verify=False, ...)
+
+  - id: hardcoded-secret-key
+    languages: [python]
+    severity: ERROR
+    message: Gizli anahtar kodun içine yazılmış. Ortam değişkeninden veya bir gizli kasa servisinden okuyun.
+    metadata: {cwe: ['CWE-798: Use of Hard-coded Credentials'], category: security, confidence: MEDIUM, impact: HIGH}
+    patterns:
+      - pattern-either:
+          - pattern: $NAME = "$VALUE"
+          - pattern: $OBJ.$NAME = "$VALUE"
+      - metavariable-regex:
+          metavariable: $NAME
+          regex: (?i)^(secret_key|jwt_secret|api_key|.*_secret|.*_token|password)$
+      - metavariable-regex:
+          metavariable: $VALUE
+          regex: ^.{8,}$
+      - metavariable-regex:
+          metavariable: $VALUE
+          regex: (?i)^(?!(changeme|your[-_].*|<.*>|xxx+|\$\{.*\})$)
+
+  - id: sqlalchemy-text-fstring
+    languages: [python]
+    severity: ERROR
+    message: SQL metni f-string/birleştirme ile kuruluyor (SQL injection). Bağlı parametre kullanın, ör. text("... WHERE id = :id").
+    metadata: {cwe: ['CWE-89: SQL Injection'], category: security, confidence: HIGH, impact: HIGH}
+    pattern-either:
+      - pattern: sqlalchemy.text(f"...")
+      - pattern: text(f"...")
+      - pattern: text("..." + $X)
+      - pattern: text("...".format(...))
+      - pattern: $CONN.execute(f"...")

@@ -1,0 +1,32 @@
+# security-toolkit şablonundan üretildi — değiştirmek için `copier update` kullanın.
+# Staging ortamına karşı haftalık derin tarama. Yalnızca kendi ortamınızı hedefleyin.
+name: security-deep
+
+on:
+  schedule:
+    - cron: "37 1 * * 6"   # her cumartesi 04:37 (TR)
+  workflow_dispatch:
+    inputs:
+      strix:
+        description: "Strix AI pentest de çalışsın mı? (LLM maliyeti oluşur)"
+        type: boolean
+        default: false
+
+jobs:
+  deep:
+    uses: {{ github_owner }}/security-toolkit/.github/workflows/deep-scan.yml@{{ toolkit_ref }}
+    permissions:
+      contents: read
+    with:
+      authorized: true
+      openapi-url: "{{ api_openapi_url }}"
+      base-url: "{{ api_base_url }}"
+      strix: {% raw %}${{ github.event_name == 'workflow_dispatch' && inputs.strix }}{% endraw %}
+      toolkit-ref: {{ toolkit_ref }}
+{%- if 'flutter' in stacks %}
+      flutter-dir: "{{ flutter_dir | trim('/') or '.' }}"
+{%- endif %}
+{%- if defectdojo %}
+      product-name: {{ project_name }}
+{%- endif %}
+    secrets: inherit
