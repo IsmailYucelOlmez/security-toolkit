@@ -9,3 +9,6 @@ updates:
   - package-ecosystem: docker
     directory: /docker
     schedule: {interval: weekly}
+    ignore:
+      # semgrep'in 3.15 wheel'i yok; yayınlandığında bu kural kaldırılmalı
+      - {dependency-name: python, versions: [">=3.15"]}
