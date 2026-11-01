@@ -181,7 +181,7 @@ jobs:
           print("Başarısız durumların yeniden üretim adımları artifact içindeki JUnit raporunda.")
           EOF
           echo "Schemathesis çıkış kodu: $rc"
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: deep-schemathesis
@@ -249,7 +249,7 @@ jobs:
               if a.get("riskcode") in ("3", "2"):
                   print(f"- {risk[a['riskcode']]} — {a.get('name')} ({a.get('count', '?')} örnek)")
           EOF
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: deep-zap
@@ -281,7 +281,7 @@ jobs:
           echo "## 🦉 Strix" >> "$GITHUB_STEP_SUMMARY"
           if [[ $rc -eq 0 ]]; then echo "Doğrulanmış açık bulunmadı." >> "$GITHUB_STEP_SUMMARY"
           else echo "Strix doğrulanmış bulgu raporladı (çıkış kodu $rc). Ayrıntılar \`deep-strix\` artifact'inde." >> "$GITHUB_STEP_SUMMARY"; fi
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: deep-strix
@@ -330,7 +330,7 @@ jobs:
           for item in s.get("high", [])[:15]:
               print(f"- 🟠 {item.get('title')} ({item.get('section', '')})")
           EOF
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: deep-mobsf
