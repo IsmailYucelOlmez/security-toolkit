@@ -1,7 +1,7 @@
 # Güvenlik yapılandırmasını bir projeye uygular.
 #
 #   Yeni veya mevcut proje:  copier copy gh:OWNER/security-toolkit . --trust
-#   Şablon değişince:        copier update --trust
+#   Şablon değişince:        copier recopy -a .security-toolkit-answers.yml --defaults --overwrite --trust
 #
 # Şablon dosyaları template/project altındadır.
 _min_copier_version: "9.3.0"
@@ -17,6 +17,9 @@ _message_after_copy: |
   {%- if deep_scan %}
     4. Derin tarama için repo Settings > Secrets bölümüne STRIX_LLM ve LLM_API_KEY ekleyin
        (DefectDojo kullanıyorsanız DEFECTDOJO_URL ve DEFECTDOJO_TOKEN da).
+       {%- if api_login_url %}
+       Giriş için TEST_USER_EMAIL ve TEST_USER_PASSWORD ekleyin; yalnızca staging'de olan bir hesap kullanın.
+       {%- endif %}
   {%- endif %}
 
 github_owner:
@@ -26,8 +29,14 @@ github_owner:
 
 toolkit_ref:
   type: str
-  help: Kullanılacak toolkit dalı veya etiketi (kararlılık için etiket önerilir, ör. v1)
-  default: main
+  help: Kullanılacak toolkit sürüm etiketi (ör. v1) veya daha sıkı sabitleme için 40 karakterlik commit SHA'sı
+  default: v1
+  validator: "{% if not (toolkit_ref | regex_search('^(v[0-9]+(\\.[0-9]+)*|[0-9a-f]{40})$')) %}Dal adı kullanılamaz: sürüm etiketi (ör. v1) veya tam commit SHA'sı girin{% endif %}"
+
+toolkit_private:
+  type: bool
+  help: Toolkit reposu private mı? (evetse projelere TOOLKIT_TOKEN secret'ı aktarılır)
+  default: false
 
 project_name:
   type: str
@@ -77,12 +86,12 @@ fail_on:
 
 upload_sarif:
   type: bool
-  help: Bulgular GitHub Security sekmesine yüklensin mi? (public repo veya GitHub Advanced Security gerekir)
+  help: Private repoda bulgular GitHub Security sekmesine yüklensin mi? (GitHub Advanced Security gerekir; public repoda otomatik)
   default: false
 
 deep_scan:
   type: bool
-  help: Haftalık derin tarama (Schemathesis, ZAP, Strix, MobSF) eklensin mi?
+  help: Haftalık derin tarama (Schemathesis, ZAP, Strix, MobSF) eklensin mi? (yalnızca private repoda çalışır)
   default: false
 
 api_openapi_url:
@@ -96,6 +105,32 @@ api_base_url:
   help: Staging API taban adresi (boşsa şemadaki adres kullanılır)
   default: ""
   when: "{{ deep_scan }}"
+
+api_login_url:
+  type: str
+  help: Taramadan önce test kullanıcısıyla giriş adresi (ör. https://staging-api.ornek.com/auth/token). Boşsa sabit API_AUTH_HEADER kullanılır
+  default: ""
+  when: "{{ deep_scan }}"
+  validator: "{% if api_login_url and not api_login_url.startswith('https://') %}Giriş adresi https olmalı{% endif %}"
+
+api_login_format:
+  type: str
+  help: Giriş isteğinin biçimi (FastAPI OAuth2 için form)
+  choices: [form, json]
+  default: form
+  when: "{{ deep_scan and api_login_url }}"
+
+api_login_user_field:
+  type: str
+  help: İstekteki kullanıcı alanının adı (ör. username, email)
+  default: username
+  when: "{{ deep_scan and api_login_url }}"
+
+api_login_token_field:
+  type: str
+  help: Yanıttaki token alanı; iç içe ise noktalı (ör. access_token, data.token)
+  default: access_token
+  when: "{{ deep_scan and api_login_url }}"
 
 defectdojo:
   type: bool

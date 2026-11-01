@@ -1,4 +1,4 @@
-# security-toolkit şablonundan üretildi — değiştirmek için `copier update` kullanın.
+# security-toolkit şablonundan üretildi — değiştirmek için `copier recopy -a .security-toolkit-answers.yml --defaults --overwrite --trust` kullanın.
 name: security
 
 on:
@@ -26,16 +26,16 @@ jobs:
 {%- if upload_sarif %}
       upload-sarif: true
 {%- endif %}
-    secrets: inherit
 {%- if defectdojo %}
-
-  defectdojo:
-    needs: scan
-    if: always() && github.ref == 'refs/heads/main'
-    uses: {{ github_owner }}/security-toolkit/.github/workflows/defectdojo-upload.yml@{{ toolkit_ref }}
-    with:
-      product-name: {{ project_name }}
-      engagement-name: CI
-      toolkit-ref: {{ toolkit_ref }}
-    secrets: inherit
+      defectdojo-product: {{ project_name }}
+{%- endif %}
+{%- if toolkit_private or defectdojo %}
+    secrets:
+{%- if toolkit_private %}
+      TOOLKIT_TOKEN: {% raw %}${{ secrets.TOOLKIT_TOKEN }}{% endraw %}
+{%- endif %}
+{%- if defectdojo %}
+      DEFECTDOJO_URL: {% raw %}${{ secrets.DEFECTDOJO_URL }}{% endraw %}
+      DEFECTDOJO_TOKEN: {% raw %}${{ secrets.DEFECTDOJO_TOKEN }}{% endraw %}
+{%- endif %}
 {%- endif %}

@@ -16,14 +16,17 @@ concurrency:
 
 jobs:
   scan:
-    uses: OWNER/security-toolkit/.github/workflows/security-scan.yml@main
+    uses: OWNER/security-toolkit/.github/workflows/security-scan.yml@v1
     permissions:
       contents: read
       pull-requests: write
       security-events: write
     with:
       fail-on: high
+      toolkit-ref: v1          # üstteki @v1 ile aynı olmalı; yoksa betikler main'den gelir
       # path: backend          # monorepo'da yalnızca bir alt dizini taramak için
       # skip: trivy
-      # upload-sarif: true     # public repo veya GitHub Advanced Security varsa
-    secrets: inherit
+      # upload-sarif: true     # private repoda GitHub Advanced Security varsa (public'te otomatik)
+    # Toolkit reposu private ise yalnızca bu secret'ı aktarın (secrets: inherit kullanmayın):
+    # secrets:
+    #   TOOLKIT_TOKEN: ${{ secrets.TOOLKIT_TOKEN }}

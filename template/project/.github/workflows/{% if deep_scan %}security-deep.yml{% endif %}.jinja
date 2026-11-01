@@ -1,4 +1,4 @@
-# security-toolkit şablonundan üretildi — değiştirmek için `copier update` kullanın.
+# security-toolkit şablonundan üretildi — değiştirmek için `copier recopy -a .security-toolkit-answers.yml --defaults --overwrite --trust` kullanın.
 # Staging ortamına karşı haftalık derin tarama. Yalnızca kendi ortamınızı hedefleyin.
 name: security-deep
 
@@ -21,6 +21,12 @@ jobs:
       authorized: true
       openapi-url: "{{ api_openapi_url }}"
       base-url: "{{ api_base_url }}"
+{%- if api_login_url %}
+      login-url: "{{ api_login_url }}"
+      login-format: {{ api_login_format }}
+      login-user-field: {{ api_login_user_field }}
+      login-token-field: {{ api_login_token_field }}
+{%- endif %}
       strix: {% raw %}${{ github.event_name == 'workflow_dispatch' && inputs.strix }}{% endraw %}
       toolkit-ref: {{ toolkit_ref }}
 {%- if 'flutter' in stacks %}
@@ -29,4 +35,19 @@ jobs:
 {%- if defectdojo %}
       product-name: {{ project_name }}
 {%- endif %}
-    secrets: inherit
+    secrets:
+{%- if api_login_url %}
+      TEST_USER_EMAIL: {% raw %}${{ secrets.TEST_USER_EMAIL }}{% endraw %}
+      TEST_USER_PASSWORD: {% raw %}${{ secrets.TEST_USER_PASSWORD }}{% endraw %}
+{%- else %}
+      API_AUTH_HEADER: {% raw %}${{ secrets.API_AUTH_HEADER }}{% endraw %}
+{%- endif %}
+      STRIX_LLM: {% raw %}${{ secrets.STRIX_LLM }}{% endraw %}
+      LLM_API_KEY: {% raw %}${{ secrets.LLM_API_KEY }}{% endraw %}
+{%- if defectdojo %}
+      DEFECTDOJO_URL: {% raw %}${{ secrets.DEFECTDOJO_URL }}{% endraw %}
+      DEFECTDOJO_TOKEN: {% raw %}${{ secrets.DEFECTDOJO_TOKEN }}{% endraw %}
+{%- endif %}
+{%- if toolkit_private %}
+      TOOLKIT_TOKEN: {% raw %}${{ secrets.TOOLKIT_TOKEN }}{% endraw %}
+{%- endif %}

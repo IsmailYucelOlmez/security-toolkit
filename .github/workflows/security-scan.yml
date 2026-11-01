@@ -22,13 +22,17 @@ on:
         type: string
         default: p/default
       upload-sarif:
-        description: "Sonuçları GitHub Code Scanning'e yükle (public repo veya GHAS gerekir)"
+        description: "Private repoda sonuçları GitHub Code Scanning'e yükle (GHAS gerekir). Public repoda PR dışındaki taramalar her zaman yüklenir"
         type: boolean
         default: false
       comment-on-pr:
-        description: "PR'a özet yorumu yaz/güncelle"
+        description: "PR'a özet yorumu yaz/güncelle (public repoda yazılmaz)"
         type: boolean
         default: true
+      defectdojo-product:
+        description: "DefectDojo ürün adı; verilirse main taramaları doğrudan yüklenir (boşsa yükleme yapılmaz)"
+        type: string
+        default: ""
       toolkit-repository:
         description: "Toolkit reposu (boşsa <sahip>/security-toolkit)"
         type: string
@@ -40,6 +44,10 @@ on:
     secrets:
       TOOLKIT_TOKEN:
         description: "Toolkit reposu private ise okuma yetkili token"
+        required: false
+      DEFECTDOJO_URL:
+        required: false
+      DEFECTDOJO_TOKEN:
         required: false
     outputs:
       failed:
@@ -61,6 +69,24 @@ jobs:
       SECURITY_TOOLS_DIR: ${{ github.workspace }}/.security-tools
       SEMGREP_CONFIG: ${{ inputs.semgrep-config }}
     steps:
+      # Public repoda log, iş özeti, artifact ve PR yorumu herkese açıktır; bulgular buralara yazılmaz.
+      # Görünürlük doğrulanamazsa da repo public sayılır.
+      - name: Repo görünürlüğü
+        id: visibility
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          value=$(gh api "repos/$GITHUB_REPOSITORY" --jq .visibility 2>/dev/null || echo unknown)
+          case "$value" in
+            private|internal) hide=false ;;
+            *) hide=true ;;
+          esac
+          echo "value=$value" >> "$GITHUB_OUTPUT"
+          echo "hide=$hide" >> "$GITHUB_OUTPUT"
+          if [[ "$hide" == "true" ]]; then
+            echo "Repo görünürlüğü \`$value\`: bulgular log, özet, artifact ve PR yorumunda gösterilmez." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Projeyi al
         uses: actions/checkout@v6
         with:
@@ -114,35 +140,50 @@ jobs:
         shell: bash
         env:
           BASE_REF: ${{ github.base_ref }}
+          HIDE_REPORTS: ${{ steps.visibility.outputs.hide }}
         run: |
           args=(--path "${{ inputs.path }}" --out "$GITHUB_WORKSPACE/security-reports" --fail-on "${{ inputs.fail-on }}")
           [[ -n "${{ inputs.skip }}" ]] && args+=(--skip "${{ inputs.skip }}")
           # PR'larda sır taraması yalnızca yeni commit'lere bakar (geçmiş, push/schedule taramasında taranır)
           [[ -n "$BASE_REF" ]] && args+=(--diff-base "origin/$BASE_REF")
           set +e
-          bash .security-toolkit/scripts/scan.sh "${args[@]}"
+          if [[ "$HIDE_REPORTS" == "false" ]]; then
+            bash .security-toolkit/scripts/scan.sh "${args[@]}"
+          else
+            unset GITHUB_STEP_SUMMARY
+            bash .security-toolkit/scripts/scan.sh "${args[@]}" > /dev/null
+          fi
           rc=$?
           set -e
           [[ $rc -eq 1 ]] && echo "failed=true" >> "$GITHUB_OUTPUT" || echo "failed=false" >> "$GITHUB_OUTPUT"
           [[ $rc -gt 1 ]] && exit $rc || true
 
       - name: Raporları yükle
-        if: always()
+        if: always() && steps.visibility.outputs.hide == 'false'
         uses: actions/upload-artifact@v5
         with:
           name: security-reports
           path: security-reports/
           retention-days: 30
 
+      # Okuma yetkisi olan herkes PR'daki Code Scanning notlarını görür; public repoda PR taraması yüklenmez.
       - name: Code Scanning'e yükle
-        if: always() && inputs.upload-sarif && hashFiles('security-reports/findings.sarif') != ''
+        if: always() && hashFiles('security-reports/findings.sarif') != '' && ((steps.visibility.outputs.value == 'public' && github.event_name != 'pull_request') || (steps.visibility.outputs.hide == 'false' && inputs.upload-sarif))
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: security-reports/findings.sarif
           category: security-toolkit
 
+      - name: DefectDojo'ya yükle
+        if: always() && inputs.defectdojo-product != '' && github.ref == 'refs/heads/main' && hashFiles('security-reports/findings.json') != ''
+        env:
+          DEFECTDOJO_URL: ${{ secrets.DEFECTDOJO_URL }}
+          DEFECTDOJO_TOKEN: ${{ secrets.DEFECTDOJO_TOKEN }}
+          PRODUCT: ${{ inputs.defectdojo-product }}
+        run: bash .security-toolkit/defectdojo/upload.sh security-reports --product "$PRODUCT" --engagement CI
+
       - name: PR yorumu
-        if: always() && inputs.comment-on-pr && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && hashFiles('security-reports/summary.md') != ''
+        if: always() && inputs.comment-on-pr && steps.visibility.outputs.hide == 'false' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && hashFiles('security-reports/summary.md') != ''
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
@@ -160,6 +201,8 @@ jobs:
 
       - name: Eşik kontrolü
         if: steps.scan.outputs.failed == 'true'
+        env:
+          DETAILS: ${{ steps.visibility.outputs.hide == 'false' && 'Ayrıntılar iş özetinde.' || 'Ayrıntılar main taramasından sonra Security sekmesinde veya yerel taramada.' }}
         run: |
-          echo "::error::'${{ inputs.fail-on }}' veya üstü derecede güvenlik bulgusu var. Ayrıntılar iş özetinde."
+          echo "::error::'${{ inputs.fail-on }}' veya üstü derecede güvenlik bulgusu var. $DETAILS"
           exit 1

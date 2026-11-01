@@ -35,6 +35,7 @@ C#'ta birleştirmeyle kurulan `SqlCommand` ve bağlantı cümlesinde parola.
    **public** olması en kolayı. Private olacaksa projelerde `TOOLKIT_TOKEN` secret'ı gerekir.
 2. `.github/workflows/selftest.yml` ilk push'ta testleri, `docker-publish.yml` imajı GHCR'ye yayınlar.
 3. Kararlı bir sürüm etiketi koyun: `git tag v1 && git push --tags` (projelerde `@v1` kullanın).
+   Şablon varsayılan olarak `v1` kullanır; bu etiket yoksa projelerde tarama başlamaz.
 
 ## Bir projeye eklemek
 
@@ -47,10 +48,43 @@ copier copy gh:OWNER/security-toolkit . --trust
 pre-commit install
 ```
 
-Şablon güncellendiğinde tüm projelere uygulamak için her projede `copier update --trust`.
+Şablon güncellendiğinde tüm projelere uygulamak için her projede:
+
+```bash
+copier recopy -a .security-toolkit-answers.yml --defaults --overwrite --trust
+```
+
+`.security-ignore.yml` korunur; diğer şablon dosyalarındaki elle yapılmış değişiklikler ezilir.
+`copier update` kullanmayın: taşınan `v1` etiketinde eski ve yeni sürümü ayırt edemez, hata vermeden
+hiçbir şey değiştirmez.
 
 **Elle:** `examples/security.yml` dosyasını projenin `.github/workflows/` klasörüne kopyalayın,
 `OWNER` kısmını değiştirin; `pre-commit/.pre-commit-config.yaml` dosyasını proje köküne kopyalayın.
+
+## Güvenli kullanım
+
+Her proje taramada toolkit'teki kodu çalıştırır; bu yüzden şablon şunları uygular:
+
+- **Sürüm sabitleme:** `toolkit_ref` dal adı kabul etmez. `v1` gibi bir etiket veya daha sıkı
+  sabitleme için tam commit SHA'sı girin. Elle kurulumda `uses: ...@` ve `toolkit-ref` aynı olmalı;
+  `toolkit-ref` verilmezse betikler `main`'den gelir.
+- **Yalnızca gereken secret'lar:** `secrets: inherit` kullanılmaz, her secret açıkça aktarılır.
+
+### Public projelerde raporlar
+
+Workflow repo görünürlüğünü her çalışmada GitHub API'sinden okur. Repo public ise veya görünürlük
+doğrulanamazsa tarama sonucu şöyle ele alınır:
+
+| Çıktı | Public repoda |
+|---|---|
+| PR yorumu, iş özeti, tarama logu, rapor artifact'i | Bulgu yazılmaz |
+| Security sekmesi (SARIF) | Push, zamanlanmış ve elle başlatılan taramalarda otomatik yüklenir; görünürlük doğrulanamazsa yüklenmez |
+| PR'daki Code Scanning notları | Yüklenmez; okuma yetkisi olan herkes görebilirdi |
+| DefectDojo | Artifact olmadan doğrudan yüklenir |
+| Derin tarama | Çalışmaz, hata verir; çıktıları yalnızca log ve artifact'te tutulur |
+
+PR hâlâ eşik aşılırsa başarısız olur; bu da bulgu olduğunu, ama ayrıntısını değil, herkese gösterir.
+Ayrıntı için taramayı yerelde çalıştırın veya birleştirme sonrası Security sekmesine bakın.
 
 ## Yerel kullanım
 
@@ -60,7 +94,7 @@ bash scripts/scan.sh --path ~/projeler/rubricator --fail-on high
 ```
 
 Çıktılar `security-reports/` altında:
-- `summary.md` — okunabilir özet (PR yorumunda da bu görünür)
+- `summary.md` — okunabilir özet (private repoda PR yorumunda da bu görünür)
 - `findings.json` — normalize bulgular (skill ve DefectDojo bunu kullanır)
 - `findings.sarif` — GitHub Security sekmesi için
 - araçların ham çıktıları
@@ -92,15 +126,27 @@ Satır içi: `# nosec B105`, `# nosemgrep`, `# gitleaks:allow`.
 
 ## Derin tarama (staging)
 
-Copier'da `deep_scan` seçilirse `security-deep.yml` eklenir; her cumartesi staging API'sine karşı
+Yalnızca private repolarda çalışır. Copier'da `deep_scan` seçilirse `security-deep.yml` eklenir; her cumartesi staging API'sine karşı
 Schemathesis ve ZAP çalışır, Flutter varsa APK derlenip MobSF ile incelenir. Strix elle
 tetiklemede seçilebilir (LLM maliyeti nedeniyle). Repo secrets:
 
 | Secret | Gerekli olduğu yer |
 |---|---|
-| `API_AUTH_HEADER` | Kimlik doğrulamalı uç noktaları test etmek için, ör. `Bearer ...` (test kullanıcısı) |
+| `TEST_USER_EMAIL`, `TEST_USER_PASSWORD` | `api_login_url` verilirse: Schemathesis ve ZAP taramadan önce giriş yapıp taze token alır |
+| `API_AUTH_HEADER` | Giriş adresi yoksa sabit başlık, ör. API anahtarı |
 | `STRIX_LLM`, `LLM_API_KEY` | Strix |
 | `DEFECTDOJO_URL`, `DEFECTDOJO_TOKEN` | DefectDojo yüklemesi |
+
+Test kullanıcısı için:
+
+- Hesap **yalnızca staging'de** bulunsun, canlıda kullanılan bir parola olmasın. Sabit token süresi
+  dolarak kendiliğinden geçersizleşir; parola ise siz değiştirene kadar geçerlidir.
+- En düşük yetkiyle, MFA gerektirmeden çalışacak şekilde ayarlayın.
+- Tarama giriş ucunu da hedef aldığı için hesabı kilitleme kuralından muaf tutun; aksi halde sonraki
+  girişler başarısız olur. Çıkış ve parola değiştirme uçları da test kullanıcısının token'ını
+  geçersiz kılabilir.
+- Giriş başarısız olursa iş durur, kimliksiz taramaya sessizce düşmez. Token ZAP taraması sürerken
+  dolarsa yenilenmez; süresini en az bir saat tutun.
 
 > ⚠️ Derin tarama hedefe saldırı trafiği gönderir. Yalnızca kendi staging ortamınızı hedefleyin;
 > workflow `authorized: true` olmadan çalışmaz ve test ortamına benzemeyen adresler için uyarır.
