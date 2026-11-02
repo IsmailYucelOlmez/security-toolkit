@@ -98,7 +98,7 @@ TEST_USER_EMAIL="$STAGING_USER_A_EMAIL" TEST_USER_PASSWORD="$STAGING_USER_A_PASS
 TEST_USER_EMAIL="$STAGING_USER_B_EMAIL" TEST_USER_PASSWORD="$STAGING_USER_B_PASSWORD" python3 "$TK/scripts/login.py" --env-file "$T" --name USER_B_TOKEN
 ```
 
-Giriş biçimi farklıysa `LOGIN_FORMAT`, `LOGIN_USER_FIELD` ve `LOGIN_TOKEN_FIELD` değişkenlerini de ver.
+Windows'ta `python3` yoksa `python` kullan. Giriş biçimi farklıysa `LOGIN_FORMAT`, `LOGIN_USER_FIELD` ve `LOGIN_TOKEN_FIELD` değişkenlerini de ver.
 
 **Deneme**
 

@@ -5,10 +5,12 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule: {interval: weekly}
+    cooldown: {default-days: 7}
 {%- if 'python' in stacks %}
   - package-ecosystem: pip
     directory: {{ python_dir }}
     schedule: {interval: weekly}
+    cooldown: {default-days: 7}
     groups:
       python-minor:
         update-types: [minor, patch]
@@ -17,14 +19,17 @@ updates:
   - package-ecosystem: pub
     directory: {{ flutter_dir }}
     schedule: {interval: weekly}
+    cooldown: {default-days: 7}
 {%- endif %}
 {%- if 'dotnet' in stacks %}
   - package-ecosystem: nuget
     directory: {{ dotnet_dir }}
     schedule: {interval: weekly}
+    cooldown: {default-days: 7}
 {%- endif %}
 {%- if 'docker' in stacks %}
   - package-ecosystem: docker
     directory: {{ docker_dir }}
     schedule: {interval: weekly}
+    cooldown: {default-days: 7}
 {%- endif %}

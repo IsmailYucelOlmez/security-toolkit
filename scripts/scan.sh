@@ -37,11 +37,16 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-TARGET="$(cd "$TARGET" && pwd)"
+TARGET="$(cd "$TARGET" && pwd)" || { echo "Hedef dizin yok: $TARGET" >&2; exit 2; }
 OUT="${OUT:-$TARGET/security-reports}"
-mkdir -p "$OUT"
-OUT="$(cd "$OUT" && pwd)"
-export PATH="${SECURITY_TOOLS_DIR:-$HOME/.security-tools}/bin:$PATH"
+mkdir -p "$OUT" && OUT="$(cd "$OUT" && pwd)" || { echo "Rapor dizini oluşturulamadı: $OUT" >&2; exit 2; }
+# Raporlar bulgu içerir; proje .gitignore'una bakılmaksızın commit'lenmemeli
+[[ -e "$OUT/.gitignore" ]] || printf '*\n' > "$OUT/.gitignore"
+TOOLS_HOME="${SECURITY_TOOLS_DIR:-$HOME/.security-tools}"
+export PATH="$TOOLS_HOME/bin:$TOOLS_HOME/venv/Scripts:$PATH"
+# Windows'ta python3 çoğunlukla yoktur veya Microsoft Store yönlendirmesidir; UTF-8 raporun emojileri için
+if python3 -c '' >/dev/null 2>&1; then PYTHON=python3; else PYTHON=python; fi
+export PYTHONUTF8=1
 
 STATUS_FILE="$OUT/_status.tsv"
 : > "$STATUS_FILE"
@@ -55,7 +60,7 @@ enabled() {
 }
 have()    { command -v "$1" >/dev/null 2>&1; }
 semgrep_error() {
-  python3 -c 'import json,sys
+  "$PYTHON" -c 'import json,sys
 try: print(json.load(open(sys.argv[1]))["errors"][0]["message"].splitlines()[0][:200])
 except Exception: print("ayrıntı için semgrep.log")' "$OUT/semgrep.json"
 }
@@ -190,4 +195,4 @@ if enabled dotnet && has_stack dotnet; then
 fi
 
 # ---------------------------------------------------------------- özet
-python3 "$TOOLKIT_DIR/scripts/summarize.py" --reports "$OUT" --target "$TARGET" --fail-on "$FAIL_ON"
+"$PYTHON" "$TOOLKIT_DIR/scripts/summarize.py" --reports "$OUT" --target "$TARGET" --fail-on "$FAIL_ON"

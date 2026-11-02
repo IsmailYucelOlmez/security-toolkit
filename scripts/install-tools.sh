@@ -4,7 +4,7 @@
 #   scripts/install-tools.sh [--with-dotnet] [--only gitleaks,osv,trivy,python]
 #
 # Kurulum dizini: $SECURITY_TOOLS_DIR (varsayılan: ~/.security-tools)
-# Sürüm sabitlemek için: GITLEAKS_VERSION=8.28.0 OSV_SCANNER_VERSION=2.2.4 TRIVY_VERSION=0.67.2
+# Sürüm sabitlemek için: GITLEAKS_VERSION=8.28.0 OSV_SCANNER_VERSION=2.2.4 TRIVY_VERSION=0.76.1
 # (boş bırakılırsa GitHub'daki en son sürüm kullanılır)
 set -euo pipefail
 
@@ -30,7 +30,7 @@ log()  { echo "[install-tools] $*"; }
 mkdir -p "$BIN_DIR"
 
 OS="$(uname -s)"; ARCH="$(uname -m)"
-case "$OS" in Linux) os=linux ;; Darwin) os=darwin ;; *) echo "Desteklenmeyen işletim sistemi: $OS" >&2; exit 1 ;; esac
+case "$OS" in Linux) os=linux ;; Darwin) os=darwin ;; MINGW*|MSYS*|CYGWIN*) os=windows ;; *) echo "Desteklenmeyen işletim sistemi: $OS" >&2; exit 1 ;; esac
 case "$ARCH" in x86_64|amd64) arch=amd64 ;; arm64|aarch64) arch=arm64 ;; *) echo "Desteklenmeyen mimari: $ARCH" >&2; exit 1 ;; esac
 
 # GitHub API kotasına takılmamak için /releases/latest yönlendirmesinden etiketi okur.
@@ -40,19 +40,40 @@ latest_tag() {
 
 fetch() { curl -fsSL --retry 3 -o "$2" "$1"; }
 
+# Windows'ta python3 çoğunlukla yoktur veya Microsoft Store yönlendirmesidir
+if python3 -c '' >/dev/null 2>&1; then PYTHON=python3; else PYTHON=python; fi
+
+unzip_to() { "$PYTHON" -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' "$1" "$2"; }
+
+require_windows_amd64() {
+  [[ $arch == amd64 ]] || { echo "$1 için Windows $arch sürümü desteklenmiyor" >&2; exit 1; }
+}
+
 install_gitleaks() {
   local v="${GITLEAKS_VERSION:-}"; [[ -z "$v" ]] && v="$(latest_tag gitleaks/gitleaks)"; v="${v#v}"
   local a; [[ $arch == amd64 ]] && a=x64 || a=arm64
   local tmp; tmp="$(mktemp -d)"
-  fetch "https://github.com/gitleaks/gitleaks/releases/download/v${v}/gitleaks_${v}_${os}_${a}.tar.gz" "$tmp/g.tgz"
-  tar -xzf "$tmp/g.tgz" -C "$tmp" gitleaks && install -m 0755 "$tmp/gitleaks" "$BIN_DIR/gitleaks"
+  if [[ $os == windows ]]; then
+    require_windows_amd64 gitleaks
+    fetch "https://github.com/gitleaks/gitleaks/releases/download/v${v}/gitleaks_${v}_windows_x64.zip" "$tmp/g.zip"
+    unzip_to "$tmp/g.zip" "$tmp" && cp "$tmp/gitleaks.exe" "$BIN_DIR/gitleaks.exe"
+  else
+    fetch "https://github.com/gitleaks/gitleaks/releases/download/v${v}/gitleaks_${v}_${os}_${a}.tar.gz" "$tmp/g.tgz"
+    tar -xzf "$tmp/g.tgz" -C "$tmp" gitleaks && install -m 0755 "$tmp/gitleaks" "$BIN_DIR/gitleaks"
+  fi
   rm -rf "$tmp"; log "gitleaks $v"
 }
 
 install_osv() {
   local v="${OSV_SCANNER_VERSION:-}"; [[ -z "$v" ]] && v="$(latest_tag google/osv-scanner)"; v="${v#v}"
-  fetch "https://github.com/google/osv-scanner/releases/download/v${v}/osv-scanner_${os}_${arch}" "$BIN_DIR/osv-scanner"
-  chmod 0755 "$BIN_DIR/osv-scanner"; log "osv-scanner $v"
+  if [[ $os == windows ]]; then
+    require_windows_amd64 osv-scanner
+    fetch "https://github.com/google/osv-scanner/releases/download/v${v}/osv-scanner_windows_amd64.exe" "$BIN_DIR/osv-scanner.exe"
+  else
+    fetch "https://github.com/google/osv-scanner/releases/download/v${v}/osv-scanner_${os}_${arch}" "$BIN_DIR/osv-scanner"
+    chmod 0755 "$BIN_DIR/osv-scanner"
+  fi
+  log "osv-scanner $v"
 }
 
 install_trivy() {
@@ -61,18 +82,28 @@ install_trivy() {
   [[ $os == linux ]] && o=Linux || o=macOS
   [[ $arch == amd64 ]] && a=64bit || a=ARM64
   local tmp; tmp="$(mktemp -d)"
-  fetch "https://github.com/aquasecurity/trivy/releases/download/v${v}/trivy_${v}_${o}-${a}.tar.gz" "$tmp/t.tgz"
-  tar -xzf "$tmp/t.tgz" -C "$tmp" trivy && install -m 0755 "$tmp/trivy" "$BIN_DIR/trivy"
+  if [[ $os == windows ]]; then
+    require_windows_amd64 trivy
+    fetch "https://github.com/aquasecurity/trivy/releases/download/v${v}/trivy_${v}_windows-64bit.zip" "$tmp/t.zip"
+    unzip_to "$tmp/t.zip" "$tmp" && cp "$tmp/trivy.exe" "$BIN_DIR/trivy.exe"
+  else
+    fetch "https://github.com/aquasecurity/trivy/releases/download/v${v}/trivy_${v}_${o}-${a}.tar.gz" "$tmp/t.tgz"
+    tar -xzf "$tmp/t.tgz" -C "$tmp" trivy && install -m 0755 "$tmp/trivy" "$BIN_DIR/trivy"
+  fi
   rm -rf "$tmp"; log "trivy $v"
 }
 
 install_python_tools() {
-  python3 -m venv "$VENV_DIR"
-  "$VENV_DIR/bin/pip" install -q --upgrade pip
+  "$PYTHON" -m venv "$VENV_DIR"
+  # Windows'ta sanal ortam Scripts altındadır; scan.sh bu dizini PATH'e ekler
+  local venv_bin="$VENV_DIR/bin"; [[ $os == windows ]] && venv_bin="$VENV_DIR/Scripts"
+  "$venv_bin/python" -m pip install -q --upgrade pip
   # Sürümler requirements dosyasında sabit; Dependabot bu dosyayı günceller.
-  "$VENV_DIR/bin/pip" install -q -r "$(dirname "$0")/requirements-tools.txt"
-  for t in bandit pip-audit semgrep; do ln -sf "$VENV_DIR/bin/$t" "$BIN_DIR/$t"; done
-  log "python araçları: $("$VENV_DIR/bin/bandit" --version 2>/dev/null | head -1), pip-audit, semgrep"
+  "$venv_bin/python" -m pip install -q -r "$(dirname "$0")/requirements-tools.txt"
+  if [[ $os != windows ]]; then
+    for t in bandit pip-audit semgrep; do ln -sf "$venv_bin/$t" "$BIN_DIR/$t"; done
+  fi
+  log "python araçları: $("$venv_bin/bandit" --version 2>/dev/null | head -1), pip-audit, semgrep"
 }
 
 install_dotnet() {

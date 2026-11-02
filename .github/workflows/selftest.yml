@@ -37,3 +37,10 @@ jobs:
           semgrep --validate --metrics=off --config rules/semgrep
       - name: Araç kurulumu çalışıyor mu
         run: bash scripts/install-tools.sh && ~/.security-tools/bin/gitleaks version && ~/.security-tools/bin/osv-scanner --version && ~/.security-tools/bin/trivy --version
+      - name: Şablon kendi taramasından geçiyor mu
+        run: |
+          pip install -q copier
+          copier copy --trust --defaults --vcs-ref=HEAD -d github_owner=ornek -d project_name=ornek -d 'stacks=[python,flutter,dotnet,docker]' -d deep_scan=true . "$RUNNER_TEMP/sablon"
+          git -C "$RUNNER_TEMP/sablon" init -q
+          git -C "$RUNNER_TEMP/sablon" add -A
+          bash scripts/scan.sh --path "$RUNNER_TEMP/sablon" --only semgrep --fail-on high

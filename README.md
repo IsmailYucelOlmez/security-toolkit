@@ -33,8 +33,8 @@ C#'ta birleştirmeyle kurulan `SqlCommand` ve bağlantı cümlesinde parola.
 1. Bu klasörü GitHub'da **`security-toolkit`** adlı bir repo olarak yayınlayın. İçinde sır yok;
    **public** olması en kolayı. Private olacaksa projelerde `TOOLKIT_TOKEN` secret'ı gerekir.
 2. `.github/workflows/selftest.yml` ilk push'ta testleri, `docker-publish.yml` imajı GHCR'ye yayınlar.
-3. Kararlı bir sürüm etiketi koyun: `git tag v2 && git push --tags` (projelerde `@v2` kullanın).
-   Şablon varsayılan olarak `v2` kullanır; bu etiket yoksa projelerde tarama başlamaz.
+3. Kararlı bir sürüm etiketi koyun: `git tag v2.0.1 && git push --tags` (projelerde `@v2.0.1` kullanın).
+   Şablon varsayılan olarak `v2.0.1` kullanır; bu etiket yoksa projelerde tarama başlamaz.
 
 ## Bir projeye eklemek
 
@@ -57,12 +57,13 @@ copier recopy -a .security-toolkit-answers.yml --defaults --overwrite --trust
 `copier update` kullanmayın: taşınan sürüm etiketinde eski ve yeni sürümü ayırt edemez, hata vermeden
 hiçbir şey değiştirmez.
 
-**v1'den v2'ye geçiş:** v2'de DefectDojo girdileri kaldırıldı, deep-scan'e ikinci kullanıcı eklendi.
-Cevap dosyası eski etiketi korur, bu yüzden geçişte etiketi açıkça verin. Şablon `v2` ile `v1`
-workflow'unu birlikte kullanmak çalışmaz.
+**Eski sürümlerden geçiş:** v2'de DefectDojo girdileri kaldırıldı, deep-scan'e ikinci kullanıcı eklendi.
+Cevap dosyası eski etiketi korur, bu yüzden geçişte etiketi açıkça verin. Yeni şablonu `v1`
+workflow'uyla birlikte kullanmak çalışmaz. v2.0.1'de Dependabot'a 7 günlük bekleme süresi eklendi;
+`v2` şablonuyla üretilen projelerin PR'ı bu bulgu yüzünden başarısız olur, güncelleyin.
 
 ```bash
-copier recopy -a .security-toolkit-answers.yml --defaults --overwrite --trust -d toolkit_ref=v2
+copier recopy -a .security-toolkit-answers.yml --defaults --overwrite --trust -d toolkit_ref=v2.0.1
 ```
 
 **Elle:** `examples/security.yml` dosyasını projenin `.github/workflows/` klasörüne kopyalayın,
@@ -72,7 +73,7 @@ copier recopy -a .security-toolkit-answers.yml --defaults --overwrite --trust -d
 
 Her proje taramada toolkit'teki kodu çalıştırır; bu yüzden şablon şunları uygular:
 
-- **Sürüm sabitleme:** `toolkit_ref` dal adı kabul etmez. `v2` gibi bir etiket veya daha sıkı
+- **Sürüm sabitleme:** `toolkit_ref` dal adı kabul etmez. `v2.0.1` gibi bir etiket veya daha sıkı
   sabitleme için tam commit SHA'sı girin. Elle kurulumda `uses: ...@` ve `toolkit-ref` aynı olmalı;
   `toolkit-ref` verilmezse betikler `main`'den gelir.
 - **Yalnızca gereken secret'lar:** `secrets: inherit` kullanılmaz, her secret açıkça aktarılır.
@@ -116,6 +117,19 @@ docker run --rm -v "$PWD:/src" ghcr.io/OWNER/security-toolkit:dotnet          # 
 ```
 
 Windows'ta: `docker\scan.ps1 -Path C:\Projeler\DurusMerkezi`
+
+## Windows'ta Docker'sız kullanım
+
+`install-tools.sh` ve `scan.sh` Git Bash'te çalışır (Windows x64); Python kurulu olmalıdır:
+
+```bash
+bash scripts/install-tools.sh
+bash scripts/scan.sh --path /c/projeler/rubricator --fail-on high
+```
+
+Git Bash, komut satırında `/` ile başlayan değerleri Windows yoluna çevirir. `copier` ile
+`-d python_dir=/` gibi değerler vermeyin; varsayılan zaten `/`, soruları etkileşimli yanıtlamak da güvenlidir.
+Vermeniz gerekirse komutun başına `MSYS_NO_PATHCONV=1` ekleyin.
 
 ## Yanlış pozitifleri bastırmak
 

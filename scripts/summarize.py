@@ -48,9 +48,9 @@ def rel(path: str | None, target: Path) -> str:
         return ""
     p = Path(path)
     try:
-        return str(p.resolve().relative_to(target)) if p.is_absolute() else str(p)
+        return (p.resolve().relative_to(target) if p.is_absolute() else p).as_posix()
     except ValueError:
-        return str(p)
+        return p.as_posix()
 
 
 def cvss_to_sev(score) -> str | None:
