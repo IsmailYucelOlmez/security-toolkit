@@ -29,9 +29,9 @@ github_owner:
 
 toolkit_ref:
   type: str
-  help: Kullanılacak toolkit sürüm etiketi (ör. v1) veya daha sıkı sabitleme için 40 karakterlik commit SHA'sı
-  default: v1
-  validator: "{% if not (toolkit_ref | regex_search('^(v[0-9]+(\\.[0-9]+)*|[0-9a-f]{40})$')) %}Dal adı kullanılamaz: sürüm etiketi (ör. v1) veya tam commit SHA'sı girin{% endif %}"
+  help: Kullanılacak toolkit sürüm etiketi (ör. v2) veya daha sıkı sabitleme için 40 karakterlik commit SHA'sı
+  default: v2
+  validator: "{% if not (toolkit_ref | regex_search('^(v[0-9]+(\\.[0-9]+)*|[0-9a-f]{40})$')) %}Dal adı kullanılamaz: sürüm etiketi (ör. v2) veya tam commit SHA'sı girin{% endif %}"
 
 toolkit_private:
   type: bool
