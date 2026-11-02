@@ -32,22 +32,17 @@ jobs:
 {%- if 'flutter' in stacks %}
       flutter-dir: "{{ flutter_dir | trim('/') or '.' }}"
 {%- endif %}
-{%- if defectdojo %}
-      product-name: {{ project_name }}
-{%- endif %}
     secrets:
 {%- if api_login_url %}
       TEST_USER_EMAIL: {% raw %}${{ secrets.TEST_USER_EMAIL }}{% endraw %}
       TEST_USER_PASSWORD: {% raw %}${{ secrets.TEST_USER_PASSWORD }}{% endraw %}
+      TEST_USER_B_EMAIL: {% raw %}${{ secrets.TEST_USER_B_EMAIL }}{% endraw %}
+      TEST_USER_B_PASSWORD: {% raw %}${{ secrets.TEST_USER_B_PASSWORD }}{% endraw %}
 {%- else %}
       API_AUTH_HEADER: {% raw %}${{ secrets.API_AUTH_HEADER }}{% endraw %}
 {%- endif %}
       STRIX_LLM: {% raw %}${{ secrets.STRIX_LLM }}{% endraw %}
       LLM_API_KEY: {% raw %}${{ secrets.LLM_API_KEY }}{% endraw %}
-{%- if defectdojo %}
-      DEFECTDOJO_URL: {% raw %}${{ secrets.DEFECTDOJO_URL }}{% endraw %}
-      DEFECTDOJO_TOKEN: {% raw %}${{ secrets.DEFECTDOJO_TOKEN }}{% endraw %}
-{%- endif %}
 {%- if toolkit_private %}
       TOOLKIT_TOKEN: {% raw %}${{ secrets.TOOLKIT_TOKEN }}{% endraw %}
 {%- endif %}

@@ -2,16 +2,16 @@
 # yalnızca sahibi olduğunuz veya yazılı izniniz olan hedeflerde kullanın.
 #
 # İşler (her biri girdisi verilirse çalışır):
-#   schemathesis  OpenAPI şemasından binlerce uç durum isteği (500 hataları, şema ihlalleri)
+#   schemathesis  OpenAPI şemasından binlerce uç durum isteği (500 hataları, şema ihlalleri); yetki hatasında iş başarısız olur
 #   zap           OWASP ZAP API taraması (şema varsa) veya pasif baseline taraması
 #   strix         Kaynak kod + canlı adres üzerinde AI pentest
 #   mobsf         Flutter APK'sını derleyip MobSF ile statik analiz
 #
 # Repo secrets:
 #   TEST_USER_EMAIL, TEST_USER_PASSWORD  login-url verilirse; her iş taramadan önce giriş yapıp taze token alır
+#   TEST_USER_B_EMAIL, TEST_USER_B_PASSWORD  isteğe bağlı ikinci kullanıcı; Schemathesis'te IDOR kontrolünü açar
 #   API_AUTH_HEADER                 login-url yoksa isteğe bağlı sabit başlık, ör. API anahtarı
 #   STRIX_LLM, LLM_API_KEY          strix için
-#   DEFECTDOJO_URL, DEFECTDOJO_TOKEN isteğe bağlı
 name: deep-scan
 
 on:
@@ -64,10 +64,6 @@ on:
         description: "Flutter projesinin dizini (boşsa MobSF çalışmaz)"
         type: string
         default: ""
-      product-name:
-        description: "DefectDojo ürün adı (boşsa yükleme yapılmaz)"
-        type: string
-        default: ""
       toolkit-repository:
         type: string
         default: ""
@@ -79,15 +75,15 @@ on:
         required: false
       TEST_USER_PASSWORD:
         required: false
+      TEST_USER_B_EMAIL:
+        required: false
+      TEST_USER_B_PASSWORD:
+        required: false
       API_AUTH_HEADER:
         required: false
       STRIX_LLM:
         required: false
       LLM_API_KEY:
-        required: false
-      DEFECTDOJO_URL:
-        required: false
-      DEFECTDOJO_TOKEN:
         required: false
       TOOLKIT_TOKEN:
         required: false
@@ -130,20 +126,21 @@ jobs:
     if: inputs.openapi-url != ''
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      HAS_USER_B: ${{ secrets.TEST_USER_B_EMAIL != '' }}
     steps:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - run: pip install -q "schemathesis>=4,<5"
-      # Maskeli değerler job çıktısıyla taşınamadığı için her iş kendi girişini yapar
+      - run: pip install -q "schemathesis>=4.33,<5"
       - uses: actions/checkout@v6
-        if: inputs.login-url != ''
         with:
           repository: ${{ inputs.toolkit-repository || format('{0}/security-toolkit', github.repository_owner) }}
           ref: ${{ inputs.toolkit-ref }}
           path: .security-toolkit
           token: ${{ secrets.TOOLKIT_TOKEN || github.token }}
           persist-credentials: false
+      # Maskeli değerler job çıktısıyla taşınamadığı için her iş kendi girişini yapar
       - name: Test kullanıcısıyla giriş
         id: login
         if: inputs.login-url != ''
@@ -156,33 +153,37 @@ jobs:
           TEST_USER_EMAIL: ${{ secrets.TEST_USER_EMAIL }}
           TEST_USER_PASSWORD: ${{ secrets.TEST_USER_PASSWORD }}
         run: python3 .security-toolkit/scripts/login.py
+      - name: İkinci test kullanıcısıyla giriş
+        id: login_b
+        if: inputs.login-url != '' && env.HAS_USER_B == 'true'
+        env:
+          LOGIN_URL: ${{ inputs.login-url }}
+          LOGIN_FORMAT: ${{ inputs.login-format }}
+          LOGIN_USER_FIELD: ${{ inputs.login-user-field }}
+          LOGIN_PASSWORD_FIELD: ${{ inputs.login-password-field }}
+          LOGIN_TOKEN_FIELD: ${{ inputs.login-token-field }}
+          TEST_USER_EMAIL: ${{ secrets.TEST_USER_B_EMAIL }}
+          TEST_USER_PASSWORD: ${{ secrets.TEST_USER_B_PASSWORD }}
+        run: python3 .security-toolkit/scripts/login.py
       - name: Schemathesis
         env:
-          AUTH: ${{ steps.login.outputs.header || secrets.API_AUTH_HEADER }}
+          AUTH_HEADER_A: ${{ steps.login.outputs.header || secrets.API_AUTH_HEADER }}
+          AUTH_HEADER_B: ${{ steps.login_b.outputs.header }}
           OPENAPI: ${{ inputs.openapi-url }}
           BASE: ${{ inputs.base-url }}
           MAX_TIME: ${{ inputs.schemathesis-max-time }}
-        run: |
-          args=("$OPENAPI" --checks all --max-time "$MAX_TIME" --wait-for-schema 60
-                --report "junit,har" --report-dir deep-reports/schemathesis)
-          [[ -n "$BASE" ]] && args+=(--url "$BASE")
-          [[ -n "$AUTH" ]] && args+=(-H "Authorization: $AUTH")
-          set +e; schemathesis run "${args[@]}"; rc=$?; set -e
-          python3 - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
-          import glob, xml.etree.ElementTree as ET
-          files = glob.glob("deep-reports/schemathesis/*.xml")
-          tests = failures = errors = 0
-          for f in files:
-              root = ET.parse(f).getroot()
-              for s in root.iter("testsuite"):
-                  tests += int(s.get("tests", 0)); failures += int(s.get("failures", 0)); errors += int(s.get("errors", 0))
-          print("## 🧪 Schemathesis\n")
-          print(f"İşlem sayısı: **{tests}** · başarısız: **{failures}** · hata: **{errors}**\n")
-          print("Başarısız durumların yeniden üretim adımları artifact içindeki JUnit raporunda.")
-          EOF
-          echo "Schemathesis çıkış kodu: $rc"
-      - uses: actions/upload-artifact@v7
+        run: bash .security-toolkit/scripts/run_schemathesis.sh
+      - name: Raporlarda token kontrolü
+        id: tokens
         if: always()
+        env:
+          AUTH_HEADER_A: ${{ steps.login.outputs.header || secrets.API_AUTH_HEADER }}
+          AUTH_HEADER_B: ${{ steps.login_b.outputs.header }}
+        run: |
+          mkdir -p deep-reports
+          python3 .security-toolkit/scripts/redact_tokens.py deep-reports --check
+      - uses: actions/upload-artifact@v7
+        if: always() && steps.tokens.outcome == 'success'
         with:
           name: deep-schemathesis
           path: deep-reports/
@@ -260,32 +261,78 @@ jobs:
     if: inputs.strix
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    env:
+      HAS_USER_B: ${{ secrets.TEST_USER_B_EMAIL != '' }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      # Sürüm sandbox imajını da sabitler
       - name: Strix kur
-        run: curl -sSL https://strix.ai/install | bash
+        run: pip install -q "strix-agent==1.7.0"
+      # Toolkit taranmasın diye proje ayrı dizine alınır
+      - uses: actions/checkout@v6
+        with:
+          path: project
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ inputs.toolkit-repository || format('{0}/security-toolkit', github.repository_owner) }}
+          ref: ${{ inputs.toolkit-ref }}
+          path: .security-toolkit
+          token: ${{ secrets.TOOLKIT_TOKEN || github.token }}
+          persist-credentials: false
+      - name: Test kullanıcısıyla giriş
+        id: login
+        if: inputs.login-url != ''
+        env:
+          LOGIN_URL: ${{ inputs.login-url }}
+          LOGIN_FORMAT: ${{ inputs.login-format }}
+          LOGIN_USER_FIELD: ${{ inputs.login-user-field }}
+          LOGIN_PASSWORD_FIELD: ${{ inputs.login-password-field }}
+          LOGIN_TOKEN_FIELD: ${{ inputs.login-token-field }}
+          TEST_USER_EMAIL: ${{ secrets.TEST_USER_EMAIL }}
+          TEST_USER_PASSWORD: ${{ secrets.TEST_USER_PASSWORD }}
+        run: python3 .security-toolkit/scripts/login.py
+      - name: İkinci test kullanıcısıyla giriş
+        id: login_b
+        if: inputs.login-url != '' && env.HAS_USER_B == 'true'
+        env:
+          LOGIN_URL: ${{ inputs.login-url }}
+          LOGIN_FORMAT: ${{ inputs.login-format }}
+          LOGIN_USER_FIELD: ${{ inputs.login-user-field }}
+          LOGIN_PASSWORD_FIELD: ${{ inputs.login-password-field }}
+          LOGIN_TOKEN_FIELD: ${{ inputs.login-token-field }}
+          TEST_USER_EMAIL: ${{ secrets.TEST_USER_B_EMAIL }}
+          TEST_USER_PASSWORD: ${{ secrets.TEST_USER_B_PASSWORD }}
+        run: python3 .security-toolkit/scripts/login.py
       - name: Strix AI pentest
         env:
           STRIX_LLM: ${{ secrets.STRIX_LLM }}
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          STRIX_TELEMETRY: "false"
+          AUTH_HEADER_A: ${{ steps.login.outputs.header || secrets.API_AUTH_HEADER }}
+          AUTH_HEADER_B: ${{ steps.login_b.outputs.header }}
           BASE: ${{ inputs.base-url }}
           MODE: ${{ inputs.strix-scan-mode }}
-        run: |
-          if [[ -z "$STRIX_LLM" || -z "$LLM_API_KEY" ]]; then
-            echo "::error::STRIX_LLM ve LLM_API_KEY secret'ları tanımlı değil."; exit 1
-          fi
-          export PATH="$HOME/.local/bin:$HOME/.strix/bin:$PATH"
-          targets=(-t ./)
-          [[ -n "$BASE" ]] && targets+=(-t "$BASE")
-          set +e; strix -n "${targets[@]}" --scan-mode "$MODE"; rc=$?; set -e
-          echo "## 🦉 Strix" >> "$GITHUB_STEP_SUMMARY"
-          if [[ $rc -eq 0 ]]; then echo "Doğrulanmış açık bulunmadı." >> "$GITHUB_STEP_SUMMARY"
-          else echo "Strix doğrulanmış bulgu raporladı (çıkış kodu $rc). Ayrıntılar \`deep-strix\` artifact'inde." >> "$GITHUB_STEP_SUMMARY"; fi
-      - uses: actions/upload-artifact@v7
+          TARGET_DIR: ./project
+        run: bash .security-toolkit/scripts/run_strix.sh
+      # Strix talimatı strix_runs/ altına kaydeder; ::add-mask:: artifact'leri korumaz
+      - name: Raporlarda token'ları maskele
+        id: tokens
         if: always()
+        env:
+          AUTH_HEADER_A: ${{ steps.login.outputs.header || secrets.API_AUTH_HEADER }}
+          AUTH_HEADER_B: ${{ steps.login_b.outputs.header }}
+        run: |
+          mkdir -p strix_runs
+          python3 .security-toolkit/scripts/redact_tokens.py strix_runs
+      - uses: actions/upload-artifact@v7
+        if: always() && steps.tokens.outcome == 'success'
         with:
           name: deep-strix
           path: strix_runs/
+          retention-days: 14
           if-no-files-found: ignore
 
   mobsf:
@@ -336,30 +383,3 @@ jobs:
           name: deep-mobsf
           path: deep-reports/
           if-no-files-found: ignore
-
-  defectdojo:
-    needs: [guard, zap, mobsf]
-    if: always() && needs.guard.result == 'success' && inputs.product-name != ''
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      DEFECTDOJO_URL: ${{ secrets.DEFECTDOJO_URL }}
-      DEFECTDOJO_TOKEN: ${{ secrets.DEFECTDOJO_TOKEN }}
-    steps:
-      - uses: actions/checkout@v6
-        if: env.DEFECTDOJO_URL != ''
-        with:
-          repository: ${{ inputs.toolkit-repository || format('{0}/security-toolkit', github.repository_owner) }}
-          ref: ${{ inputs.toolkit-ref }}
-          path: .security-toolkit
-          token: ${{ secrets.TOOLKIT_TOKEN || github.token }}
-          persist-credentials: false
-      - uses: actions/download-artifact@v5
-        if: env.DEFECTDOJO_URL != ''
-        with:
-          pattern: deep-*
-          path: reports
-          merge-multiple: true
-      - name: DefectDojo'ya yükle
-        if: env.DEFECTDOJO_URL != ''
-        run: bash .security-toolkit/defectdojo/upload.sh reports --product "${{ inputs.product-name }}" --engagement "Derin tarama"

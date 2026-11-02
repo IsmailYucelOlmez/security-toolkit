@@ -10,7 +10,6 @@ projelerini algılar, uygun araçları çalıştırır, sonuçları tek rapora t
 | **deep-scan** workflow | Haftalık / sürüm öncesi | Staging'e karşı Schemathesis, ZAP, Strix, MobSF |
 | **Docker imajı** | CI olmayan ortamlar | Aynı taramayı tek komutla (fabrika ağı, Windows makineler) |
 | **security-review** skill | İstendiğinde | Bulguları doğrular, araçların kaçırdıklarını arar, düzeltir |
-| **DefectDojo** | Sürekli | Tüm projelerin bulgularını tek panelde toplar |
 
 ## Hangi araç neyi tarar
 
@@ -34,8 +33,8 @@ C#'ta birleştirmeyle kurulan `SqlCommand` ve bağlantı cümlesinde parola.
 1. Bu klasörü GitHub'da **`security-toolkit`** adlı bir repo olarak yayınlayın. İçinde sır yok;
    **public** olması en kolayı. Private olacaksa projelerde `TOOLKIT_TOKEN` secret'ı gerekir.
 2. `.github/workflows/selftest.yml` ilk push'ta testleri, `docker-publish.yml` imajı GHCR'ye yayınlar.
-3. Kararlı bir sürüm etiketi koyun: `git tag v1 && git push --tags` (projelerde `@v1` kullanın).
-   Şablon varsayılan olarak `v1` kullanır; bu etiket yoksa projelerde tarama başlamaz.
+3. Kararlı bir sürüm etiketi koyun: `git tag v2 && git push --tags` (projelerde `@v2` kullanın).
+   Şablon varsayılan olarak `v2` kullanır; bu etiket yoksa projelerde tarama başlamaz.
 
 ## Bir projeye eklemek
 
@@ -55,8 +54,16 @@ copier recopy -a .security-toolkit-answers.yml --defaults --overwrite --trust
 ```
 
 `.security-ignore.yml` korunur; diğer şablon dosyalarındaki elle yapılmış değişiklikler ezilir.
-`copier update` kullanmayın: taşınan `v1` etiketinde eski ve yeni sürümü ayırt edemez, hata vermeden
+`copier update` kullanmayın: taşınan sürüm etiketinde eski ve yeni sürümü ayırt edemez, hata vermeden
 hiçbir şey değiştirmez.
+
+**v1'den v2'ye geçiş:** v2'de DefectDojo girdileri kaldırıldı, deep-scan'e ikinci kullanıcı eklendi.
+Cevap dosyası eski etiketi korur, bu yüzden geçişte etiketi açıkça verin. Şablon `v2` ile `v1`
+workflow'unu birlikte kullanmak çalışmaz.
+
+```bash
+copier recopy -a .security-toolkit-answers.yml --defaults --overwrite --trust -d toolkit_ref=v2
+```
 
 **Elle:** `examples/security.yml` dosyasını projenin `.github/workflows/` klasörüne kopyalayın,
 `OWNER` kısmını değiştirin; `pre-commit/.pre-commit-config.yaml` dosyasını proje köküne kopyalayın.
@@ -65,7 +72,7 @@ hiçbir şey değiştirmez.
 
 Her proje taramada toolkit'teki kodu çalıştırır; bu yüzden şablon şunları uygular:
 
-- **Sürüm sabitleme:** `toolkit_ref` dal adı kabul etmez. `v1` gibi bir etiket veya daha sıkı
+- **Sürüm sabitleme:** `toolkit_ref` dal adı kabul etmez. `v2` gibi bir etiket veya daha sıkı
   sabitleme için tam commit SHA'sı girin. Elle kurulumda `uses: ...@` ve `toolkit-ref` aynı olmalı;
   `toolkit-ref` verilmezse betikler `main`'den gelir.
 - **Yalnızca gereken secret'lar:** `secrets: inherit` kullanılmaz, her secret açıkça aktarılır.
@@ -80,7 +87,6 @@ doğrulanamazsa tarama sonucu şöyle ele alınır:
 | PR yorumu, iş özeti, tarama logu, rapor artifact'i | Bulgu yazılmaz |
 | Security sekmesi (SARIF) | Push, zamanlanmış ve elle başlatılan taramalarda otomatik yüklenir; görünürlük doğrulanamazsa yüklenmez |
 | PR'daki Code Scanning notları | Yüklenmez; okuma yetkisi olan herkes görebilirdi |
-| DefectDojo | Artifact olmadan doğrudan yüklenir |
 | Derin tarama | Çalışmaz, hata verir; çıktıları yalnızca log ve artifact'te tutulur |
 
 PR hâlâ eşik aşılırsa başarısız olur; bu da bulgu olduğunu, ama ayrıntısını değil, herkese gösterir.
@@ -95,7 +101,7 @@ bash scripts/scan.sh --path ~/projeler/rubricator --fail-on high
 
 Çıktılar `security-reports/` altında:
 - `summary.md` — okunabilir özet (private repoda PR yorumunda da bu görünür)
-- `findings.json` — normalize bulgular (skill ve DefectDojo bunu kullanır)
+- `findings.json` — normalize bulgular (skill bunu kullanır)
 - `findings.sarif` — GitHub Security sekmesi için
 - araçların ham çıktıları
 
@@ -127,15 +133,15 @@ Satır içi: `# nosec B105`, `# nosemgrep`, `# gitleaks:allow`.
 ## Derin tarama (staging)
 
 Yalnızca private repolarda çalışır. Copier'da `deep_scan` seçilirse `security-deep.yml` eklenir; her cumartesi staging API'sine karşı
-Schemathesis ve ZAP çalışır, Flutter varsa APK derlenip MobSF ile incelenir. Strix elle
-tetiklemede seçilebilir (LLM maliyeti nedeniyle). Repo secrets:
+Schemathesis ve ZAP çalışır, Flutter varsa APK derlenip MobSF ile incelenir. Strix varsayılan olarak
+kapalıdır, yalnızca elle tetiklemede seçilir. Repo secrets:
 
 | Secret | Gerekli olduğu yer |
 |---|---|
 | `TEST_USER_EMAIL`, `TEST_USER_PASSWORD` | `api_login_url` verilirse: Schemathesis ve ZAP taramadan önce giriş yapıp taze token alır |
+| `TEST_USER_B_EMAIL`, `TEST_USER_B_PASSWORD` | İsteğe bağlı ikinci kullanıcı: Schemathesis'te IDOR kontrolünü açar (`api_login_url` gerekir) |
 | `API_AUTH_HEADER` | Giriş adresi yoksa sabit başlık, ör. API anahtarı |
-| `STRIX_LLM`, `LLM_API_KEY` | Strix |
-| `DEFECTDOJO_URL`, `DEFECTDOJO_TOKEN` | DefectDojo yüklemesi |
+| `STRIX_LLM`, `LLM_API_KEY` | Yalnızca Strix kullanılacaksa |
 
 Test kullanıcısı için:
 
@@ -148,21 +154,46 @@ Test kullanıcısı için:
 - Giriş başarısız olursa iş durur, kimliksiz taramaya sessizce düşmez. Token ZAP taraması sürerken
   dolarsa yenilenmez; süresini en az bir saat tutun.
 
+### Yetki kontrolleri
+
+Schemathesis işi, kimlik doğrulaması uygulanmayan bir uç (`ST401`) veya başka kullanıcının nesnesini
+okuyabilen bir kullanıcı (`ST402`, IDOR) bulursa başarısız olur. Şema yüklenemezse veya hiçbir işlem
+test edilemezse de başarısız olur. Diğer kontrollerin bulguları yalnızca raporlanır.
+
+IDOR kontrolü yalnızca ikinci kullanıcı tanımlıysa çalışır; yoksa iş özeti bunu açıkça söyler. Bu
+kontrol için API'nin kayıt oluşturup kimliğini döndürmesi (veya kullanıcıya özel liste sunması) ve
+kaydı o kimlikle okuyan bir `GET` ucu olması gerekir. Kontrol okumayı sınar; yazma ve silme için
+[yetki matrisi testlerini](examples/authz/README.md) kullanın. Tasarım gereği paylaşılan kaynaklar
+yanlış pozitif verebilir.
+
+Bulgular takip sistemine gitmez; özet ve artifact'te kalır. Artifact'e yazılmadan önce raporlarda
+test kullanıcısı token'ı aranır, bulunursa rapor yüklenmez.
+
+### Strix
+
+Ödeme veya hassas veri içeren projelerde büyük sürüm öncesi tek seferlik kullanım içindir; düzenli
+kontroller Schemathesis, [yetki matrisi](examples/authz/README.md) ve skill ile yapılır.
+
+- Test kullanıcısı token'ları talimat olarak verilir ve **LLM sağlayıcısına gider**; kaynak kod da
+  taranır. Bu yüzden yalnızca staging hesabı ve kısa ömürlü token kullanın.
+- Giriş bilgisi yoksa canlı test girişsiz yüzeyle sınırlı kalır, iş özeti bunu belirtir.
+- Token'lar artifact'ten önce maskelenir, telemetri kapalıdır, artifact 14 gün saklanır.
+- Bulgu işi başarısız yapmaz, özette yazar. Tarama çalışamazsa iş başarısız olur.
+
 > ⚠️ Derin tarama hedefe saldırı trafiği gönderir. Yalnızca kendi staging ortamınızı hedefleyin;
 > workflow `authorized: true` olmadan çalışmaz ve test ortamına benzemeyen adresler için uyarır.
-
-## DefectDojo
-
-Kendi sunucunuzda çalıştırmak için resmi docker-compose kurulumu:
-<https://github.com/DefectDojo/django-DefectDojo> → `docker compose up -d`.
-API token'ı kullanıcı menüsünden alın. `defectdojo/upload.sh` her araç için `reimport-scan`
-kullanır: tekrar eden bulgular birleşir, düzelenler otomatik kapanır.
 
 ## Claude skill'i
 
 `skills/security-review/SKILL.md` — taramayı çalıştırır, her bulguyu kodu okuyarak doğrular,
 araçların kaçırdığı IDOR / yetkilendirme / toplu atama hatalarını elle arar ve düzeltme önerir.
 "Bu projenin güvenliğini incele" demeniz yeterli.
+
+"Bulguları staging'de kanıtla" derseniz iki test kullanıcısıyla istek atıp açığı doğrular. Her
+oturumda hedef onayı ister, varsayılan olarak yalnızca okuma isteği gönderir. Kullanıcı bilgilerini
+sohbete yazmayın; `~/.config/security-toolkit/staging-users.env` dosyasına koyun. Token'lar
+`~/.cache/security-toolkit/` altında tutulur, iş bitince silinir. Windows'ta dosya izinleri
+(`chmod 600`) bu dosyaları korumaz; yalnızca staging hesabı kullanın.
 
 ## Bilinen sınırlar
 
@@ -176,6 +207,7 @@ araçların kaçırdığı IDOR / yetkilendirme / toplu atama hatalarını elle 
 
 ```bash
 python -m unittest discover tests -v
-shellcheck scripts/*.sh docker/*.sh defectdojo/*.sh
+python tests/e2e_authz.py    # pip install "schemathesis>=4.33,<5" gerekir
+shellcheck scripts/*.sh docker/*.sh
 actionlint
 ```

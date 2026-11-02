@@ -2,7 +2,7 @@
 """Araç çıktılarını ortak bir bulgu formatına çevirir, tekrarları ayıklar,
 .security-ignore.yml ile bastırılanları düşer ve şunları yazar:
 
-  findings.json   normalize bulgular (DefectDojo / skill / diğer araçlar için)
+  findings.json   normalize bulgular (skill / diğer araçlar için)
   findings.sarif  GitHub Code Scanning'e yüklenebilir SARIF 2.1.0
   summary.md      insan okuyabilir özet (PR yorumu ve iş özeti)
 

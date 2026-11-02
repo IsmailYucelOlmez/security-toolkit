@@ -26,16 +26,7 @@ jobs:
 {%- if upload_sarif %}
       upload-sarif: true
 {%- endif %}
-{%- if defectdojo %}
-      defectdojo-product: {{ project_name }}
-{%- endif %}
-{%- if toolkit_private or defectdojo %}
-    secrets:
 {%- if toolkit_private %}
+    secrets:
       TOOLKIT_TOKEN: {% raw %}${{ secrets.TOOLKIT_TOKEN }}{% endraw %}
-{%- endif %}
-{%- if defectdojo %}
-      DEFECTDOJO_URL: {% raw %}${{ secrets.DEFECTDOJO_URL }}{% endraw %}
-      DEFECTDOJO_TOKEN: {% raw %}${{ secrets.DEFECTDOJO_TOKEN }}{% endraw %}
-{%- endif %}
 {%- endif %}

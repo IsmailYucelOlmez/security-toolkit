@@ -15,10 +15,10 @@ _message_after_copy: |
     2. pre-commit run --all-files     (mevcut kodu bir kez kontrol et)
     3. Değişiklikleri commit'leyip push'la; ilk tarama Actions sekmesinde çalışır.
   {%- if deep_scan %}
-    4. Derin tarama için repo Settings > Secrets bölümüne STRIX_LLM ve LLM_API_KEY ekleyin
-       (DefectDojo kullanıyorsanız DEFECTDOJO_URL ve DEFECTDOJO_TOKEN da).
+    4. Strix'i kullanacaksanız repo Settings > Secrets bölümüne STRIX_LLM ve LLM_API_KEY ekleyin.
        {%- if api_login_url %}
        Giriş için TEST_USER_EMAIL ve TEST_USER_PASSWORD ekleyin; yalnızca staging'de olan bir hesap kullanın.
+       IDOR kontrolü için ikinci bir staging hesabıyla TEST_USER_B_EMAIL ve TEST_USER_B_PASSWORD ekleyin.
        {%- endif %}
   {%- endif %}
 
@@ -29,9 +29,9 @@ github_owner:
 
 toolkit_ref:
   type: str
-  help: Kullanılacak toolkit sürüm etiketi (ör. v1) veya daha sıkı sabitleme için 40 karakterlik commit SHA'sı
-  default: v1
-  validator: "{% if not (toolkit_ref | regex_search('^(v[0-9]+(\\.[0-9]+)*|[0-9a-f]{40})$')) %}Dal adı kullanılamaz: sürüm etiketi (ör. v1) veya tam commit SHA'sı girin{% endif %}"
+  help: Kullanılacak toolkit sürüm etiketi (ör. v2) veya daha sıkı sabitleme için 40 karakterlik commit SHA'sı
+  default: v2
+  validator: "{% if not (toolkit_ref | regex_search('^(v[0-9]+(\\.[0-9]+)*|[0-9a-f]{40})$')) %}Dal adı kullanılamaz: sürüm etiketi (ör. v2) veya tam commit SHA'sı girin{% endif %}"
 
 toolkit_private:
   type: bool
@@ -40,7 +40,7 @@ toolkit_private:
 
 project_name:
   type: str
-  help: Proje adı (raporlarda ve DefectDojo'da görünür)
+  help: Proje adı
   default: "{{ _folder_name if _folder_name is defined else 'proje' }}"
 
 stacks:
@@ -131,8 +131,3 @@ api_login_token_field:
   help: Yanıttaki token alanı; iç içe ise noktalı (ör. access_token, data.token)
   default: access_token
   when: "{{ deep_scan and api_login_url }}"
-
-defectdojo:
-  type: bool
-  help: Sonuçlar DefectDojo'ya yüklensin mi?
-  default: false

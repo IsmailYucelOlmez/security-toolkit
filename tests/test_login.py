@@ -101,6 +101,38 @@ class LoginTest(unittest.TestCase):
         proc, _ = self.run_login(self.base + "/token", TEST_USER_PASSWORD="")
         self.assertEqual(proc.returncode, 1)
 
+    def run_env_file(self, target, name="USER_A_TOKEN"):
+        env = {k: v for k, v in os.environ.items() if k != "GITHUB_OUTPUT"}
+        env.update(PYTHONUTF8="1", LOGIN_URL=self.base + "/token", TEST_USER_EMAIL="test@ornek.com",
+                   TEST_USER_PASSWORD=PASSWORD)
+        return subprocess.run([sys.executable, str(ROOT / "scripts" / "login.py"),
+                               "--env-file", str(target), "--name", name],
+                              capture_output=True, text=True, encoding="utf-8", env=env)
+
+    def test_env_file_saves_token_without_printing_it(self):
+        target = Path(tempfile.mkdtemp()) / "alt" / "tokens.env"
+        proc = self.run_env_file(target)
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        self.assertNotIn(TOKEN, proc.stdout + proc.stderr)
+        self.assertEqual(target.read_text(encoding="utf-8"), f"USER_A_TOKEN={TOKEN}\n")
+
+    def test_env_file_replaces_same_name_and_keeps_others(self):
+        target = Path(tempfile.mkdtemp()) / "tokens.env"
+        target.write_text("USER_A_TOKEN=eski\nUSER_B_TOKEN=diger\n", encoding="utf-8")
+        self.assertEqual(self.run_env_file(target).returncode, 0)
+        self.assertEqual(target.read_text(encoding="utf-8"), f"USER_B_TOKEN=diger\nUSER_A_TOKEN={TOKEN}\n")
+
+    def test_env_file_refused_inside_git_repo(self):
+        target = ROOT / "tokens.env"
+        proc = self.run_env_file(target)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("git deposu", proc.stdout)
+        self.assertFalse(target.exists())
+
+    def test_env_file_rejects_unsafe_name(self):
+        proc = self.run_env_file(Path(tempfile.mkdtemp()) / "tokens.env", name="A;rm -rf")
+        self.assertEqual(proc.returncode, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
