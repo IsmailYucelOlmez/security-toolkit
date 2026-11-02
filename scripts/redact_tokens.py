@@ -9,16 +9,25 @@ başarısız olur. Token değerleri hiçbir zaman yazdırılmaz.
 Çıkış kodu: 0 = temiz veya maskelendi, 1 = --check token buldu
 """
 import argparse
+import base64
 import os
 from pathlib import Path
+from urllib.parse import quote
 
 MASK = b"[Filtered]"
 
 
 def tokens():
     values = (os.environ.get(name, "") for name in ("AUTH_HEADER_A", "AUTH_HEADER_B"))
-    # "Bearer abc" başlığında sızıntı yalnızca abc olarak da görünebilir
-    return [value.split()[-1].encode() for value in values if value.strip()]
+    found = set()
+    for value in values:
+        if value.strip():
+            # "Bearer abc" başlığında sızıntı yalnızca abc olarak da görünebilir; rapor biçimi kodlamış da olabilir
+            for raw in (value.strip(), value.split()[-1]):
+                found |= {raw.encode(), quote(raw, safe="").encode(), base64.b64encode(raw.encode()),
+                          base64.urlsafe_b64encode(raw.encode()).rstrip(b"=")}
+    # Uzun olan önce: başlığın tamamı, içindeki token'dan önce maskelenmeli
+    return sorted(found, key=len, reverse=True)
 
 
 def main():

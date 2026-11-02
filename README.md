@@ -113,7 +113,7 @@ bash scripts/scan.sh --path ~/projeler/rubricator --fail-on high
 - araçların ham çıktıları
 
 Aynı açık birden çok araçtan gelirse tek kayda indirilir; bir paketin tüm açıkları tek satırda,
-gereken en düşük güvenli sürümle gösterilir.
+gereken en düşük güvenli sürümle gösterilir. Açık birden çok manifestteyse tüm konumlar raporda ve `locations` alanında listelenir.
 
 ### Çıkış kodları
 
@@ -165,6 +165,10 @@ Projenin kökünde `.security-ignore.yml`:
   expires: 2026-12-31      # bu tarihten sonra bulgu yeniden çıkar
 ```
 
+`reason` ve `expires` zorunludur. Eksik veya geçersiz kayıtlar, yalnızca joker karakterden oluşan `id` ve CWE kimliği
+bulguyu bastırmaz; bunlar, süresi dolan kayıtlar ve 30 gün içinde dolacaklar `summary.md` içinde listelenir. Semgrep'te
+yalnızca kural adı (`fastapi-debug-enabled`) yeterlidir. `path` verilirse açığın bulunduğu tüm konumlar eşleşmelidir.
+
 Satır içi: `# nosec B105`, `# nosemgrep`, `# gitleaks:allow`.
 
 ## Derin tarama (staging)
@@ -203,8 +207,9 @@ kaydı o kimlikle okuyan bir `GET` ucu olması gerekir. Kontrol okumayı sınar;
 [yetki matrisi testlerini](examples/authz/README.md) kullanın. Tasarım gereği paylaşılan kaynaklar
 yanlış pozitif verebilir.
 
-Bulgular takip sistemine gitmez; özet ve artifact'te kalır. Artifact'e yazılmadan önce raporlarda
-test kullanıcısı token'ı aranır, bulunursa rapor yüklenmez.
+Bulgular takip sistemine gitmez; özet ve artifact'te kalır. Artifact'e yazılmadan önce raporlarda test kullanıcısı
+token'ı düz, URL ve base64 kodlu biçimde aranır: Schemathesis raporu token içeriyorsa yüklenmez, ZAP ve Strix
+raporlarında token maskelenir.
 
 ### Strix
 

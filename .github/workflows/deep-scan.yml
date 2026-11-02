@@ -195,7 +195,6 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-        if: inputs.login-url != ''
         with:
           repository: ${{ inputs.toolkit-repository || format('{0}/security-toolkit', github.repository_owner) }}
           ref: ${{ inputs.toolkit-ref }}
@@ -251,8 +250,18 @@ jobs:
               if a.get("riskcode") in ("3", "2"):
                   print(f"- {risk[a['riskcode']]} — {a.get('name')} ({a.get('count', '?')} örnek)")
           EOF
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      # ZAP istek başlıklarını rapora yazabilir; ::add-mask:: artifact'leri korumaz
+      - name: Raporlarda token'ları maskele
+        id: tokens
         if: always()
+        env:
+          AUTH_HEADER_A: ${{ steps.login.outputs.header || secrets.API_AUTH_HEADER }}
+        run: |
+          mkdir -p zap
+          sudo chown -R "$(id -u)" zap
+          python3 .security-toolkit/scripts/redact_tokens.py zap
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always() && steps.tokens.outcome == 'success'
         with:
           name: deep-zap
           path: zap/

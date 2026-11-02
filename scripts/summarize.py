@@ -34,6 +34,7 @@ TOOL_NAMES = {
     "dependencies": "Bağımlılık kapsamı",
     "tarama": "Tarama",
 }
+EXPIRY_WARNING_DAYS = 30
 EXIT_THRESHOLD = 1
 EXIT_INCOMPLETE = 3  # 2 scan.sh'in kullanım hatasıdır
 INCOMPLETE_STATUSES = {"missing", "error", "partial"}
@@ -275,7 +276,7 @@ def dedupe(findings):
     """Aynı paket+açık birden çok araçtan gelirse tek kayda indirger, en yüksek dereceyi tutar."""
     out, index = [], {}
     for f in findings:
-        f = {**f, "also_found_by": []}
+        f = {**f, "also_found_by": [], "locations": [f["file"]] if f["file"] else []}
         if not (f["package"] and f["ids"]):
             out.append(f)
             continue
@@ -294,6 +295,8 @@ def dedupe(findings):
                       "ids": sorted(set(cur["ids"]) | set(f["ids"])),
                       "fixed_version": base["fixed_version"] or other["fixed_version"]}
             merged["also_found_by"] = sorted({cur["tool"], f["tool"], *cur["also_found_by"]} - {merged["tool"]})
+            # Aynı açık başka manifestte de olabilir; tek kayda insek de hiçbir konum kaybolmamalı
+            merged["locations"] = sorted(set(cur["locations"]) | set(f["locations"]))
             out[hit] = merged
         for i in out[hit]["ids"]:
             index[(pkg, i)] = hit
@@ -333,6 +336,7 @@ def group_by_package(findings):
         g["ids"] = sorted(set(g["ids"]) | set(f["ids"]))
         g["_fixes"].append(f["fixed_version"])
         g["also_found_by"] = sorted(set(g["also_found_by"]) | set(f["also_found_by"]))
+        g["locations"] = sorted(set(g["locations"]) | set(f["locations"]))
         if RANK[f["severity"]] < RANK[g["severity"]]:
             g["severity"] = f["severity"]
     for g in out:
@@ -349,10 +353,28 @@ def group_by_package(findings):
 
 
 # ------------------------------------------------------------------ bastırma
+def ignore_problem(it) -> str | None:
+    """Uygulanamayacak kaydın nedenini döner. Bu kayıtlar bulguyu bastırmaz, raporda listelenir."""
+    ident = str(it["id"])
+    if ident.upper().startswith("CWE-"):
+        return "CWE ile toplu bastırma yapılamaz; kural veya açık kimliği verin"
+    if not ident.strip("*?[]"):
+        return "id yalnızca joker karakter olamaz"
+    if not it.get("reason"):
+        return "reason zorunlu"
+    if not it.get("expires"):
+        return "expires zorunlu"
+    try:
+        dt.date.fromisoformat(str(it["expires"]))
+    except ValueError:
+        return f"expires geçersiz: {it['expires']} (YYYY-MM-DD olmalı)"
+    return None
+
+
 def load_ignores(target: Path):
     path = next((p for p in (target / ".security-ignore.yml", target / ".security-ignore.yaml") if p.exists()), None)
     if not path:
-        return []
+        return [], []
     try:
         import yaml  # type: ignore
         items = yaml.safe_load(path.read_text(encoding="utf-8")) or []
@@ -371,28 +393,35 @@ def load_ignores(target: Path):
             if cur is not None:
                 cur[m.group(2)] = m.group(3).strip().strip("'\"")
     today = dt.date.today()
-    active = []
+    active, issues = [], []
     for it in items:
         if not isinstance(it, dict) or not it.get("id"):
+            issues.append({"id": "?", "status": "geçersiz", "detail": "id zorunlu"})
             continue
-        exp = it.get("expires")
-        if exp:
-            try:
-                if dt.date.fromisoformat(str(exp)) < today:
-                    print(f"[summarize] Süresi dolmuş bastırma yok sayıldı: {it['id']} ({exp})", file=sys.stderr)
-                    continue
-            except ValueError:
-                pass
+        ident = str(it["id"])
+        problem = ignore_problem(it)
+        if problem:
+            issues.append({"id": ident, "status": "geçersiz", "detail": problem})
+            continue
+        expires = dt.date.fromisoformat(str(it["expires"]))
+        if expires < today:
+            issues.append({"id": ident, "status": "süresi doldu", "detail": str(expires)})
+            continue
+        if (expires - today).days <= EXPIRY_WARNING_DAYS:
+            issues.append({"id": ident, "status": "süresi doluyor", "detail": str(expires)})
         active.append(it)
-    return active
+    return active, issues
 
 
 def is_ignored(f, ignores):
     for it in ignores:
         ident = str(it["id"])
-        if ident != f["rule_id"] and ident not in f["ids"] and not fnmatch.fnmatch(f["rule_id"], ident):
+        # Semgrep kural kimliği dizinle başlar (rules.semgrep.ad); yalnızca kural adı da eşleşir
+        if (ident != f["rule_id"] and ident not in f["ids"] and not fnmatch.fnmatch(f["rule_id"], ident)
+                and not f["rule_id"].endswith("." + ident)):
             continue
-        if it.get("path") and not fnmatch.fnmatch(f["file"], str(it["path"])):
+        # Birleşmiş kayıtta başka konum kapsam dışındaysa bastırma açığı orada da gizlerdi
+        if it.get("path") and not all(fnmatch.fnmatch(loc, str(it["path"])) for loc in f.get("locations") or [f["file"]]):
             continue
         if it.get("tool") and it["tool"] != f["tool"]:
             continue
@@ -417,8 +446,9 @@ def to_sarif(findings):
             loc = {"physicalLocation": {"artifactLocation": {"uri": f["file"] or "."}}}
             if f["line"]:
                 loc["physicalLocation"]["region"] = {"startLine": int(f["line"])}
+            others = [{"physicalLocation": {"artifactLocation": {"uri": p}}} for p in f.get("locations", []) if p != f["file"]]
             msg = f["title"] + (f" → düzeltilmiş sürüm: {f['fixed_version']}" if f["fixed_version"] else "")
-            results.append({"ruleId": rid, "level": level[f["severity"]], "message": {"text": msg}, "locations": [loc]})
+            results.append({"ruleId": rid, "level": level[f["severity"]], "message": {"text": msg}, "locations": [loc, *others]})
         for r in rules.values():
             if not r["helpUri"]:
                 del r["helpUri"]
@@ -430,7 +460,7 @@ def md_escape(s: str) -> str:
     return str(s).replace("|", "\\|").replace("\n", " ")
 
 
-def to_markdown(active, ignored, statuses, stacks, fail_on, failed, unresolved=(), incomplete=()):
+def to_markdown(active, ignored, statuses, stacks, fail_on, failed, unresolved=(), incomplete=(), ignore_issues=()):
     counts = {s: sum(1 for f in active if f["severity"] == s) for s in SEVERITIES}
     lines = ["## 🔐 Güvenlik taraması", ""]
     verdict = "❌ **Eşik aşıldı**" if failed else "⚠️ **Tarama eksik**" if incomplete else "✅ **Eşik aşılmadı**"
@@ -445,6 +475,9 @@ def to_markdown(active, ignored, statuses, stacks, fail_on, failed, unresolved=(
     if unresolved:
         lines.append(f"\n_{len(unresolved)} OSV bulgusu atlandı: pip-audit bu paketleri başka sürüme çözdü."
                      " Sürümleri kilit dosyasıyla sabitlemek kurulumu tekrarlanabilir kılar._")
+    if ignore_issues:
+        lines.append("\n**Bastırma dosyasında dikkat gerektiren kayıtlar:**\n")
+        lines += [f"- `{md_escape(i['id'])}`: {i['status']} ({md_escape(i['detail'])})" for i in ignore_issues]
     lines += ["", "<details><summary>Araç durumu</summary>", "", "| Araç | Durum | Not |", "|---|---|---|"]
     icon = {"ok": "✅", "partial": "⚠️", "skipped": "⏭️", "missing": "➖", "error": "❌"}
     for tool, st, note in statuses:
@@ -453,7 +486,9 @@ def to_markdown(active, ignored, statuses, stacks, fail_on, failed, unresolved=(
     if active:
         lines += ["| Derece | Araç | Bulgu | Konum | Düzeltme |", "|---|---|---|---|---|"]
         for f in sorted(active, key=lambda x: (RANK[x["severity"]], x["tool"], x["file"]))[:100]:
-            where = f["file"] + (f":{f['line']}" if f["line"] else "")
+            others = [p for p in f.get("locations", []) if p != f["file"]]
+            where = f["file"] + (f":{f['line']}" if f["line"] else "") + "".join(f", {p}" for p in others[:3])
+            where += f" +{len(others) - 3} konum" if len(others) > 3 else ""
             fix = f"`{f['fixed_version']}`" if f["fixed_version"] else ""
             title = f"[{md_escape(f['title'][:110])}]({f['url']})" if f["url"] else md_escape(f["title"][:110])
             lines.append(f"| {EMOJI[f['severity']]} {f['severity']} | {f['tool']} | {title} | `{md_escape(where)}` | {fix} |")
@@ -493,7 +528,7 @@ def main():
 
     findings, unresolved = drop_unresolved_osv(findings, resolved)
     findings = dedupe(findings)
-    ignores = load_ignores(target)
+    ignores, ignore_issues = load_ignores(target)
     active, ignored = [], []
     for f in findings:
         reason = is_ignored(f, ignores)
@@ -525,9 +560,10 @@ def main():
         "target": str(target), "stacks": stacks, "fail_on": a.fail_on, "failed": failed,
         "complete": not incomplete, "counts": counts, "tools": [{"tool": t, "status": s, "note": n} for t, s, n in statuses],
         "findings": active, "ignored": ignored, "unresolved_osv": unresolved,
+        "suppression_issues": ignore_issues,
     }, ensure_ascii=False, indent=2), encoding="utf-8")
     (out / "findings.sarif").write_text(json.dumps(to_sarif(active), indent=2), encoding="utf-8")
-    md = to_markdown(active, ignored, statuses, stacks, a.fail_on, failed, unresolved, incomplete)
+    md = to_markdown(active, ignored, statuses, stacks, a.fail_on, failed, unresolved, incomplete, ignore_issues)
     (out / "summary.md").write_text(md, encoding="utf-8")
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:

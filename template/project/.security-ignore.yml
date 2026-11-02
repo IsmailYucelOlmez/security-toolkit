@@ -1,11 +1,12 @@
 # Bilinçli olarak kabul edilen güvenlik bulguları.
-# Her kayıt için gerekçe yazın; mümkünse bitiş tarihi koyun ki kabul kalıcı olmasın.
+# reason ve expires zorunludur: eksik veya geçersiz kayıt bulguyu bastırmaz, raporda listelenir.
+# CWE kimliğiyle toplu bastırma yapılamaz. Bitişine 30 gün kala rapor uyarır.
 #
 # - id: CVE-2024-12345          # açık kimliği (CVE/GHSA/PYSEC) veya kural kimliği (B105, semgrep kural adı)
 #   path: backend/legacy/*      # isteğe bağlı: yalnızca bu dosyalar
 #   tool: bandit                # isteğe bağlı: yalnızca bu araç
 #   reason: Etkilenen fonksiyon kullanılmıyor
-#   expires: 2026-12-31         # bu tarihten sonra bulgu yeniden görünür
+#   expires: 2026-12-31         # YYYY-MM-DD; bu tarihten sonra bulgu yeniden görünür
 #
 # Satır içi bastırma da mümkündür:  # nosec B105  ·  # nosemgrep  ·  # gitleaks:allow
 []

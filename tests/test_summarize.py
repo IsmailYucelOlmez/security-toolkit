@@ -1,4 +1,5 @@
 """python3 -m unittest discover tests"""
+import datetime as dt
 import json
 import os
 import shutil
@@ -19,7 +20,7 @@ def run(fail_on="high"):
     target.mkdir()
     shutil.move(str(reports / "security-ignore.yml"), target / ".security-ignore.yml")
     proc = subprocess.run([sys.executable, str(ROOT / "scripts" / "summarize.py"), "--reports", str(reports),
-                           "--target", str(target), "--fail-on", fail_on], capture_output=True, text=True)
+                           "--target", str(target), "--fail-on", fail_on], capture_output=True, text=True, encoding="utf-8")
     return proc, json.loads((reports / "findings.json").read_text()), reports
 
 
@@ -197,6 +198,87 @@ class IncompleteScanTest(unittest.TestCase):
     def test_crash_is_not_threshold_exit(self):
         proc, _ = self.summarize([("gitleaks", "ok")], {"gitleaks.json": "[]", ".security-ignore.yml": "- id: [kapanmamis\n"})
         self.assertNotEqual(proc.returncode, 1, proc.stderr)
+
+
+class SuppressionTest(unittest.TestCase):
+    RULE = {"check_id": "rules.semgrep.kural-a", "path": "a.py", "start": {"line": 1},
+            "extra": {"severity": "ERROR", "message": "m", "metadata": {"cwe": ["CWE-489: debug"]}}}
+
+    def summarize(self, ignore):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        (tmp / ".security-ignore.yml").write_text(ignore, encoding="utf-8")
+        (tmp / "semgrep.json").write_text(json.dumps({"results": [self.RULE]}), encoding="utf-8")
+        proc = subprocess.run([sys.executable, str(ROOT / "scripts" / "summarize.py"), "--reports", str(tmp),
+                               "--target", str(tmp), "--fail-on", "none"], capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return proc, json.loads((tmp / "findings.json").read_text(encoding="utf-8"))
+
+    def assert_not_applied(self, ignore, word):
+        proc, data = self.summarize(ignore)
+        self.assertEqual(len(data["findings"]), 1, "bulgu bastırılmamalı")
+        self.assertEqual(data["suppression_issues"][0]["status"], "geçersiz")
+        self.assertIn(word, proc.stdout)
+
+    def test_invalid_date_does_not_suppress(self):
+        self.assert_not_applied("- id: kural-a\n  reason: r\n  expires: 31-12-2099\n", "expires geçersiz")
+
+    def test_reason_and_expires_required(self):
+        self.assert_not_applied("- id: kural-a\n  expires: 2999-01-01\n", "reason zorunlu")
+        self.assert_not_applied("- id: kural-a\n  reason: r\n", "expires zorunlu")
+
+    def test_cwe_and_wildcard_rejected(self):
+        self.assert_not_applied("- id: CWE-489\n  reason: r\n  expires: 2999-01-01\n", "CWE")
+        self.assert_not_applied("- id: '*'\n  reason: r\n  expires: 2999-01-01\n", "joker")
+
+    def test_bare_semgrep_rule_name_matches(self):
+        _, data = self.summarize("- id: kural-a\n  reason: r\n  expires: 2999-01-01\n")
+        self.assertEqual(data["findings"], [])
+        self.assertEqual(data["suppression_issues"], [])
+
+    def test_expired_is_reported(self):
+        proc, data = self.summarize("- id: kural-a\n  reason: r\n  expires: 2000-01-01\n")
+        self.assertEqual(len(data["findings"]), 1)
+        self.assertEqual(data["suppression_issues"][0]["status"], "süresi doldu")
+        self.assertIn("süresi doldu", proc.stdout)
+
+    def test_expiring_soon_warns_but_applies(self):
+        soon = (dt.date.today() + dt.timedelta(days=10)).isoformat()
+        _, data = self.summarize(f"- id: kural-a\n  reason: r\n  expires: {soon}\n")
+        self.assertEqual(data["findings"], [])
+        self.assertEqual(data["suppression_issues"][0]["status"], "süresi doluyor")
+
+
+class MultiManifestTest(unittest.TestCase):
+    def summarize(self, ignore=None):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        vuln = {"id": "GHSA-a", "aliases": ["CVE-1"], "database_specific": {"severity": "HIGH"}}
+        (tmp / "osv.json").write_text(json.dumps({"results": [
+            {"source": {"path": f"{s}/poetry.lock"},
+             "packages": [{"package": {"name": "requests", "version": "2.0"}, "vulnerabilities": [vuln]}]}
+            for s in ("svc-a", "svc-b")]}), encoding="utf-8")
+        if ignore:
+            (tmp / ".security-ignore.yml").write_text(ignore, encoding="utf-8")
+        proc = subprocess.run([sys.executable, str(ROOT / "scripts" / "summarize.py"), "--reports", str(tmp),
+                               "--target", str(tmp), "--fail-on", "none"], capture_output=True, text=True, encoding="utf-8")
+        return proc, json.loads((tmp / "findings.json").read_text(encoding="utf-8")), tmp
+
+    def test_same_cve_keeps_every_location(self):
+        proc, data, tmp = self.summarize()
+        self.assertEqual(len(data["findings"]), 1)
+        self.assertEqual(data["findings"][0]["locations"], ["svc-a/poetry.lock", "svc-b/poetry.lock"])
+        self.assertIn("svc-b/poetry.lock", proc.stdout)
+        sarif = json.loads((tmp / "findings.sarif").read_text(encoding="utf-8"))
+        uris = {l["physicalLocation"]["artifactLocation"]["uri"] for l in sarif["runs"][0]["results"][0]["locations"]}
+        self.assertEqual(uris, {"svc-a/poetry.lock", "svc-b/poetry.lock"})
+
+    def test_path_suppression_does_not_hide_other_location(self):
+        ignore = "- id: CVE-1\n  path: svc-a/*\n  reason: r\n  expires: 2999-01-01\n"
+        _, data, _ = self.summarize(ignore)
+        self.assertEqual(len(data["findings"]), 1)
+        _, data, _ = self.summarize(ignore.replace("svc-a/*", "svc-*"))
+        self.assertEqual(data["findings"], [])
 
 
 if __name__ == "__main__":
