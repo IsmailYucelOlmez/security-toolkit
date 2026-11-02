@@ -11,6 +11,17 @@ permissions:
   contents: read
 
 jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: Birim testleri
+        run: python -m unittest discover tests -v
+
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -56,7 +67,7 @@ jobs:
       - name: Şablon kendi taramasından geçiyor mu
         run: |
           pip install -q copier
-          copier copy --trust --defaults --vcs-ref=HEAD -d github_owner=ornek -d project_name=ornek -d 'stacks=[python,flutter,dotnet,docker]' -d deep_scan=true . "$RUNNER_TEMP/sablon"
+          copier copy --defaults --vcs-ref=HEAD -d github_owner=ornek -d project_name=ornek -d 'stacks=[python,flutter,dotnet,docker]' -d deep_scan=true . "$RUNNER_TEMP/sablon"
           git -C "$RUNNER_TEMP/sablon" init -q
           git -C "$RUNNER_TEMP/sablon" add -A
           bash scripts/scan.sh --path "$RUNNER_TEMP/sablon" --only semgrep --fail-on high

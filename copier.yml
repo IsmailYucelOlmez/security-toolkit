@@ -1,7 +1,7 @@
 # Güvenlik yapılandırmasını bir projeye uygular.
 #
-#   Yeni veya mevcut proje:  copier copy gh:OWNER/security-toolkit . --trust
-#   Şablon değişince:        copier recopy -a .security-toolkit-answers.yml --defaults --overwrite --trust
+#   Yeni veya mevcut proje:  copier copy gh:OWNER/security-toolkit .
+#   Şablon değişince:        copier recopy -a .security-toolkit-answers.yml --defaults --overwrite
 #
 # Şablon dosyaları template/project altındadır.
 _min_copier_version: "9.3.0"

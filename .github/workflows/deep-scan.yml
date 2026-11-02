@@ -406,3 +406,35 @@ jobs:
           name: deep-mobsf
           path: deep-reports/
           if-no-files-found: ignore
+
+  # Çalışan işlerin raporları tek şemada toplanır. Strix'in çıktı biçimi sözleşmeli olmadığı için dışarıda kalır.
+  report:
+    needs: [guard, schemathesis, zap, mobsf]
+    if: always() && needs.guard.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          repository: ${{ inputs.toolkit-repository || format('{0}/security-toolkit', github.repository_owner) }}
+          ref: ${{ inputs.toolkit-ref }}
+          path: .security-toolkit
+          token: ${{ secrets.TOOLKIT_TOKEN || github.token }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: artifacts
+          pattern: deep-*
+      - name: Tek rapor
+        run: |
+          mkdir -p deep-findings/schemathesis
+          cp artifacts/deep-zap/zap.json deep-findings/ 2>/dev/null || true
+          cp artifacts/deep-mobsf/mobsf-scorecard.json deep-findings/ 2>/dev/null || true
+          cp artifacts/deep-schemathesis/schemathesis/*.xml deep-findings/schemathesis/ 2>/dev/null || true
+          python3 .security-toolkit/scripts/summarize.py --reports deep-findings --target . --fail-on none
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: deep-findings
+          path: |
+            deep-findings/findings.json
+            deep-findings/summary.md

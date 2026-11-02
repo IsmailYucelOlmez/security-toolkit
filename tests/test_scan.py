@@ -112,6 +112,17 @@ class FailClosedTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertTrue(data["complete"])
 
+    def test_kubernetes_only_repo_triggers_trivy(self):
+        (self.project / "k8s.yaml").write_text("apiVersion: v1\nkind: Pod\n")
+        proc, data = self.run_scan("--only", "trivy", "--allow-incomplete")
+        self.assertIn("infra", data["stacks"], proc.stdout)
+        self.assertIsNotNone(self.tool_status(data, "trivy"))
+
+    def test_plain_yaml_is_not_infra(self):
+        (self.project / "conf.yaml").write_text("anahtar: deger\n")
+        _, data = self.run_scan("--only", "gitleaks", "--allow-incomplete")
+        self.assertNotIn("infra", data["stacks"])
+
     def test_skipping_osv_disables_coverage_check(self):
         (self.project / "pubspec.yaml").write_text("name: a\n")
         (self.tools / "bin" / "gitleaks").write_text('#!/usr/bin/env bash\necho "[]" > "$(printf "%s\\n" "$@" | sed -n "/gitleaks.json/p")"\n', newline="\n")

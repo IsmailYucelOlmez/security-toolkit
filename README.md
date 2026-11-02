@@ -28,6 +28,10 @@ FastAPI'de `*` CORS + kimlik bilgisi, debug modu, imzasız JWT, `text(f"...")` S
 gömülü API anahtarı, `SharedPreferences`'ta token, `badCertificateCallback`, şifresiz HTTP;
 C#'ta birleştirmeyle kurulan `SqlCommand` ve bağlantı cümlesinde parola.
 
+`package.json` algılanır ama Node'a özel araç çalışmaz: kilit dosyaları OSV-Scanner, kod `p/default` kuralları ile taranır.
+Her taramada `sbom.cdx.json` (CycloneDX) üretilir; `--skip sbom` kapatır. Konteyner imajı için `--image REF` (workflow'da
+`image:`) verin. Trivy, Dockerfile ve Terraform dışında Kubernetes bildirimi ve Helm grafiği içeren depolarda da çalışır.
+
 ## Kurulum (bir kez)
 
 1. Bu klasörü GitHub'da **`security-toolkit`** adlı bir repo olarak yayınlayın. İçinde sır yok;
@@ -43,19 +47,23 @@ C#'ta birleştirmeyle kurulan `SqlCommand` ve bağlantı cümlesinde parola.
 ```bash
 pipx install copier
 cd ~/projeler/rubricator
-copier copy gh:OWNER/security-toolkit . --trust
+copier copy gh:OWNER/security-toolkit .
 pre-commit install
 ```
 
 Şablon güncellendiğinde tüm projelere uygulamak için her projede:
 
 ```bash
-copier recopy -a .security-toolkit-answers.yml --defaults --overwrite --trust
+copier recopy -a .security-toolkit-answers.yml --defaults --overwrite
 ```
 
 `.security-ignore.yml` korunur; diğer şablon dosyalarındaki elle yapılmış değişiklikler ezilir.
 `copier update` kullanmayın: taşınan sürüm etiketinde eski ve yeni sürümü ayırt edemez, hata vermeden
 hiçbir şey değiştirmez.
+
+**v2.0.1'de davranış değişiklikleri:** Eksik tarama artık `3` ile başarısız olur (bkz. Çıkış kodları). `.security-ignore.yml`
+kayıtlarında `reason` ve `expires` zorunludur; eksik kayıtlar bulguyu bastırmaz. PR'da eşik yalnızca yeni bulgulara uygulanır.
+Strix'in doğrulanmış bulgusu işi başarısız yapar. `GITLEAKS_VERSION` gibi sürüm değişkenleri kaldırıldı.
 
 **Eski sürümlerden geçiş:** v2'de DefectDojo girdileri kaldırıldı, deep-scan'e ikinci kullanıcı eklendi.
 Cevap dosyası eski etiketi korur, bu yüzden geçişte etiketi açıkça verin. Yeni şablonu `v1`
@@ -63,7 +71,7 @@ workflow'uyla birlikte kullanmak çalışmaz. v2.0.1'de Dependabot'a 7 günlük 
 `v2` şablonuyla üretilen projelerin PR'ı bu bulgu yüzünden başarısız olur, güncelleyin.
 
 ```bash
-copier recopy -a .security-toolkit-answers.yml --defaults --overwrite --trust -d toolkit_ref=v2.0.1
+copier recopy -a .security-toolkit-answers.yml --defaults --overwrite -d toolkit_ref=v2.0.1
 ```
 
 **Elle:** `examples/security.yml` dosyasını projenin `.github/workflows/` klasörüne kopyalayın,
@@ -77,6 +85,7 @@ Her proje taramada toolkit'teki kodu çalıştırır; bu yüzden şablon şunlar
   sabitleme için tam commit SHA'sı girin. Elle kurulumda `uses: ...@` ve `toolkit-ref` aynı olmalı;
   `toolkit-ref` verilmezse betikler `main`'den gelir.
 - **Yalnızca gereken secret'lar:** `secrets: inherit` kullanılmaz, her secret açıkça aktarılır.
+- **Sır tarayıcı:** Betterleaks kararlı v2 yayımlanana kadar (şu an `v2.0.0-rc.6`) Gitleaks'te kalınır; RC sürüm kurulmaz.
 - **Araç bütünlüğü:** Gitleaks, OSV-Scanner ve Trivy `scripts/tool-checksums.txt` içindeki sürümle kurulur, SHA-256
   özeti tutmayan dosya kurulmaz. Yükseltmek için sürüm notlarını okuyup
   `bash scripts/update-tool-checksums.sh <gitleaks> <osv-scanner> <trivy>` çalıştırın. Aksiyonlar commit SHA'sıyla,
@@ -181,7 +190,9 @@ Satır içi: `# nosec B105`, `# nosemgrep`, `# gitleaks:allow`.
 ## Derin tarama (staging)
 
 Yalnızca private repolarda çalışır. Copier'da `deep_scan` seçilirse `security-deep.yml` eklenir; her cumartesi staging API'sine karşı
-Schemathesis ve ZAP çalışır, Flutter varsa APK derlenip MobSF ile incelenir. Strix varsayılan olarak
+Schemathesis ve ZAP çalışır, Flutter varsa APK derlenip MobSF ile incelenir. Bu üçünün sonuçları `deep-findings` artifact'inde
+`findings.json` şemasında birleşir; hızlı taramayla aynı biçimdedir. MobSF'te Flutter'ın yanlış pozitif olarak belgelediği
+`libapp.so` bulguları ayıklanır. Strix varsayılan olarak
 kapalıdır, yalnızca elle tetiklemede seçilir. Repo secrets:
 
 | Secret | Gerekli olduğu yer |

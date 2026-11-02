@@ -165,7 +165,7 @@ Bu inceleme insan pentest'in yerini tutmaz; "kanıtlanamadı" açığın olmadı
 ## 8. Otomasyon eksikse
 
 Projede `.github/workflows/security.yml` veya `.pre-commit-config.yaml` yoksa, raporun sonunda tek
-cümleyle kurulumu öner: `copier copy gh:<owner>/security-toolkit . --trust`.
+cümleyle kurulumu öner: `copier copy gh:<owner>/security-toolkit .`.
 
 ## Güvenlik sınırı
 

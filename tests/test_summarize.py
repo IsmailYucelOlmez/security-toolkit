@@ -249,6 +249,52 @@ class BaselineTest(unittest.TestCase):
         self.assertEqual(result["partialFingerprints"]["securityToolkit/v1"], data["findings"][0]["fingerprint"])
 
 
+class DeepReportTest(unittest.TestCase):
+    def summarize(self, files):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        for name, text in files.items():
+            path = tmp / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+        proc = subprocess.run([sys.executable, str(ROOT / "scripts" / "summarize.py"), "--reports", str(tmp),
+                               "--target", str(tmp), "--fail-on", "high"], capture_output=True, text=True, encoding="utf-8")
+        return proc, json.loads((tmp / "findings.json").read_text(encoding="utf-8"))
+
+    def test_zap_schemathesis_and_mobsf_share_the_schema(self):
+        proc, data = self.summarize({
+            "zap.json": json.dumps({"site": [{"@name": "https://s.test", "alerts": [
+                {"pluginid": "40012", "riskcode": "3", "name": "XSS", "cweid": "79", "count": "2",
+                 "instances": [{"uri": "https://s.test/a"}]}]}]}),
+            "mobsf-scorecard.json": json.dumps({"high": [
+                {"title": "Stack canary", "description": "libapp.so", "section": "binary"},
+                {"title": "Yedeklenebilir", "section": "manifest"}]}),
+            "schemathesis/junit.xml": '<testsuites><testsuite><testcase name="GET /a">'
+                                      '<failure message="ST402">x</failure><failure message="ST101">y</failure>'
+                                      '</testcase></testsuite></testsuites>',
+        })
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        got = {(f["tool"], f["severity"]) for f in data["findings"]}
+        self.assertEqual(got, {("zap", "high"), ("mobsf", "high"), ("schemathesis", "high"), ("schemathesis", "low")})
+        self.assertNotIn("Stack canary", proc.stdout)
+
+    def test_corrupt_junit_is_incomplete(self):
+        proc, data = self.summarize({"schemathesis/junit.xml": "<testsuites"})
+        self.assertEqual(proc.returncode, 3, proc.stderr)
+        self.assertFalse(data["complete"])
+
+    def test_trivy_image_vulnerabilities(self):
+        proc, data = self.summarize({"trivy-image.json": json.dumps({"Results": [{"Target": "img (alpine)", "Vulnerabilities": [
+            {"VulnerabilityID": "CVE-1", "PkgName": "openssl", "InstalledVersion": "1.0", "FixedVersion": "1.1",
+             "Severity": "CRITICAL", "Title": "t"}]}]})})
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual((data["findings"][0]["severity"], data["findings"][0]["fixed_version"]), ("critical", "1.1"))
+
+    def test_sbom_without_format_is_incomplete(self):
+        proc, _ = self.summarize({"sbom.cdx.json": "{}"})
+        self.assertEqual(proc.returncode, 3)
+
+
 class SuppressionTest(unittest.TestCase):
     RULE = {"check_id": "rules.semgrep.kural-a", "path": "a.py", "start": {"line": 1},
             "extra": {"severity": "ERROR", "message": "m", "metadata": {"cwe": ["CWE-489: debug"]}}}

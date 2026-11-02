@@ -9,7 +9,7 @@ import json
 import re
 import sys
 
-HARDENING = re.compile(r"relro|canar|fortif|stack|symbols|strip|\\bpie\\b|\\bnx\\b", re.I)
+HARDENING = re.compile(r"relro|canar|fortif|stack|symbols|strip|\bpie\b|\bnx\b", re.I)
 
 
 def flutter_false_positive(item) -> bool:

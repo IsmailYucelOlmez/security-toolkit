@@ -29,6 +29,10 @@ on:
         description: "PR'a özet yorumu yaz/güncelle (public repoda yazılmaz)"
         type: boolean
         default: true
+      image:
+        description: "Taranacak konteyner imajı (ör. ghcr.io/sahip/uygulama:etiket); çalıştırıcının çekebilmesi gerekir"
+        type: string
+        default: ""
       new-findings-only:
         description: "PR'da eşiği yalnızca taban dalda olmayan bulgulara uygula; mevcut bulgular push ve zamanlanmış taramalarda raporlanır"
         type: boolean
@@ -141,7 +145,7 @@ jobs:
         run: |
           git worktree add -q "$RUNNER_TEMP/base" "origin/$BASE_REF"
           env -u GITHUB_STEP_SUMMARY bash .security-toolkit/scripts/scan.sh --path "$RUNNER_TEMP/base/$SCAN_PATH" \
-            --out "$RUNNER_TEMP/base-reports" --fail-on none --skip "gitleaks,$SKIP" > /dev/null 2>&1 || true
+            --out "$RUNNER_TEMP/base-reports" --fail-on none --skip "gitleaks,sbom,$SKIP" > /dev/null 2>&1 || true
 
       - name: Tara
         id: scan
@@ -149,9 +153,11 @@ jobs:
         env:
           BASE_REF: ${{ github.base_ref }}
           HIDE_REPORTS: ${{ steps.visibility.outputs.hide }}
+          IMAGE: ${{ inputs.image }}
         run: |
           args=(--path "${{ inputs.path }}" --out "$GITHUB_WORKSPACE/security-reports" --fail-on "${{ inputs.fail-on }}")
           [[ -n "${{ inputs.skip }}" ]] && args+=(--skip "${{ inputs.skip }}")
+          [[ -n "$IMAGE" ]] && args+=(--image "$IMAGE")
           # PR'larda sır taraması yalnızca yeni commit'lere bakar (geçmiş, push/schedule taramasında taranır)
           [[ -n "$BASE_REF" ]] && args+=(--diff-base "origin/$BASE_REF")
           [[ -n "$BASE_REF" && "${{ inputs.new-findings-only }}" == "true" ]] && args+=(--baseline "$RUNNER_TEMP/base-reports/findings.json")

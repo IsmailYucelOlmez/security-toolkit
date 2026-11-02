@@ -4,12 +4,13 @@
 #
 #   scripts/scan.sh [--path DIR] [--out DIR] [--fail-on high] [--diff-base REF]
 #                   [--skip semgrep,trivy] [--only gitleaks,bandit] [--allow-incomplete]
-#                   [--baseline FILE]
+#                   [--baseline FILE] [--image REF]
 #
 #   --fail-on    critical | high | medium | low | none  (varsayılan: high)
 #   --diff-base  Sadece REF..HEAD arasındaki commit'lerde sır ara (PR'lar için)
 #   --allow-incomplete  Eksik taramayı başarısız sayma (ağsız ortamlar; raporda yine görünür)
 #   --baseline   Taban dalın findings.json dosyası; eşik yalnızca yeni bulgulara uygulanır
+#   --image      Bu konteyner imajını da tara (trivy image)
 #
 # Ortam değişkenleri:
 #   SEMGREP_CONFIG   Semgrep kural seti (varsayılan: p/default). Ağ yoksa yalnızca yerel kurallar.
@@ -27,6 +28,7 @@ DIFF_BASE=""
 SKIP=""
 ONLY=""
 SUMMARY_ARGS=()
+IMAGE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -38,7 +40,8 @@ while [[ $# -gt 0 ]]; do
     --only) ONLY="$2"; shift ;;
     --allow-incomplete) SUMMARY_ARGS+=(--allow-incomplete) ;;
     --baseline) SUMMARY_ARGS+=(--baseline "$2"); shift ;;
-    -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
+    --image) IMAGE="$2"; shift ;;
+    -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
     *) echo "Bilinmeyen seçenek: $1" >&2; exit 2 ;;
   esac
   shift
@@ -50,6 +53,8 @@ mkdir -p "$OUT" && OUT="$(cd "$OUT" && pwd)" || { echo "Rapor dizini oluşturula
 # Raporlar bulgu içerir; proje .gitignore'una bakılmaksızın commit'lenmemeli
 [[ -e "$OUT/.gitignore" ]] || printf '*\n' > "$OUT/.gitignore"
 TOOLS_HOME="${SECURITY_TOOLS_DIR:-$HOME/.security-tools}"
+# Windows yolundaki iki nokta PATH'i böler (C:/...)
+command -v cygpath >/dev/null 2>&1 && TOOLS_HOME="$(cygpath -u "$TOOLS_HOME")"
 export PATH="$TOOLS_HOME/bin:$TOOLS_HOME/venv/Scripts:$PATH"
 # Windows'ta python3 çoğunlukla yoktur veya Microsoft Store yönlendirmesidir; UTF-8 raporun emojileri için
 if python3 -c '' >/dev/null 2>&1; then PYTHON=python3; else PYTHON=python; fi
@@ -90,7 +95,17 @@ STACKS=()
 [[ -n "$(find_files pubspec.yaml | head -1)" ]]                    && STACKS+=(flutter)
 [[ -n "$(find_files '*.csproj' '*.sln' '*.slnx' | head -1)" ]]     && STACKS+=(dotnet)
 [[ -n "$(find_files 'package.json' | head -1)" ]]                  && STACKS+=(node)
-[[ -n "$(find_files 'Dockerfile' 'Dockerfile.*' '*.Dockerfile' '*.tf' | head -1)" ]] && STACKS+=(infra)
+# Yalnızca Kubernetes bildirimi veya Helm grafiği içeren depolarda da Trivy çalışmalı
+has_k8s_manifest() {
+  local f
+  while IFS= read -r f; do
+    grep -q '^apiVersion:' "$f" && grep -q '^kind:' "$f" && return 0
+  done < <(find_files '*.yaml' '*.yml')
+  return 1
+}
+if [[ -n "$(find_files 'Dockerfile' 'Dockerfile.*' '*.Dockerfile' '*.tf' 'Chart.yaml' | head -1)" ]] || has_k8s_manifest; then
+  STACKS+=(infra)
+fi
 log "Hedef: $TARGET"
 log "Algılanan yığınlar: ${STACKS[*]:-(yok)}"
 printf '%s\n' "${STACKS[@]}" > "$OUT/_stacks.txt"
@@ -212,6 +227,25 @@ if enabled trivy && has_stack infra; then
       --skip-dirs "**/node_modules" --skip-dirs "**/.venv" "$TARGET" 2>"$OUT/trivy.log"
     [[ $? -eq 0 ]] && status trivy ok || status trivy error "$(tail -1 "$OUT/trivy.log")"
   else status trivy missing "trivy kurulu değil"; fi
+fi
+
+# ---------------------------------------------------------------- trivy image (konteyner imajı)
+if [[ -n "$IMAGE" ]] && enabled trivy; then
+  if have trivy; then
+    log "trivy: $IMAGE imajı"
+    trivy image --quiet --format json --output "$OUT/trivy-image.json" "$IMAGE" 2>"$OUT/trivy-image.log"
+    [[ $? -eq 0 ]] && status trivy-image ok || status trivy-image error "$(tail -1 "$OUT/trivy-image.log")"
+  else status trivy-image missing "trivy kurulu değil"; fi
+fi
+
+# ---------------------------------------------------------------- SBOM (CycloneDX; açık taraması yapmaz)
+if enabled sbom; then
+  if have trivy; then
+    log "sbom: bileşen listesi"
+    trivy fs --quiet --format cyclonedx --output "$OUT/sbom.cdx.json" \
+      --skip-dirs "**/node_modules" --skip-dirs "**/.venv" "$TARGET" 2>"$OUT/sbom.log"
+    [[ $? -eq 0 ]] && status sbom ok || status sbom error "$(tail -1 "$OUT/sbom.log")"
+  else status sbom missing "trivy kurulu değil"; fi
 fi
 
 # ---------------------------------------------------------------- dotnet (NuGet açıkları)

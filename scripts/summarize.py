@@ -19,6 +19,7 @@ import json
 import os
 import re
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 SEVERITIES = ["critical", "high", "medium", "low", "info"]
@@ -33,6 +34,8 @@ TOOL_NAMES = {
     "trivy": "Trivy (altyapı yapılandırması)",
     "dotnet": "dotnet (NuGet bağımlılıkları)",
     "dependencies": "Bağımlılık kapsamı",
+    "sbom": "SBOM (CycloneDX)",
+    "trivy-image": "Trivy (konteyner imajı)",
     "tarama": "Tarama",
 }
 EXPIRY_WARNING_DAYS = 30
@@ -41,9 +44,12 @@ EXIT_INCOMPLETE = 3  # 2 scan.sh'in kullanım hatasıdır
 INCOMPLETE_STATUSES = {"missing", "error", "partial"}
 # Araç "ok" dese bile bu anahtar yoksa çıktı biçimi değişmiş olabilir; sıfır bulgu sayılmamalı
 REPORT_KEYS = {"osv": "results", "bandit": "results", "semgrep": "results",
-               "pip-audit": "dependencies", "dotnet": "projects"}
+               "pip-audit": "dependencies", "dotnet": "projects", "sbom": "bomFormat", "zap": "site"}
 REPORT_FILES = {"gitleaks": "gitleaks.json", "osv": "osv.json", "bandit": "bandit.json", "semgrep": "semgrep.json",
-                "trivy": "trivy.json", "pip-audit": "pip-audit-*.json", "dotnet": "dotnet-*.json"}
+                "trivy": "trivy.json", "pip-audit": "pip-audit-*.json", "dotnet": "dotnet-*.json",
+                "sbom": "sbom.cdx.json", "trivy-image": "trivy-image.json", "zap": "zap.json",
+                "mobsf": "mobsf-scorecard.json"}
+ZAP_RISK = {"3": "high", "2": "medium", "1": "low", "0": "info"}
 
 
 def load_json(path: Path):
@@ -230,6 +236,48 @@ def parse_trivy(data, target):
                 line=(m.get("CauseMetadata") or {}).get("StartLine"),
                 ids=[m.get("ID"), m.get("AVDID")], url=m.get("PrimaryURL", ""),
             )
+
+
+def parse_trivy_image(data, target):
+    for res in (data or {}).get("Results", []) or []:
+        for v in res.get("Vulnerabilities", []) or []:
+            yield finding(
+                "trivy-image", v.get("VulnerabilityID", ""), word_to_sev(v.get("Severity")),
+                f"{v.get('PkgName')} {v.get('InstalledVersion', '')}: {v.get('Title') or v.get('VulnerabilityID')}",
+                file=res.get("Target", ""), package=v.get("PkgName", ""), version=v.get("InstalledVersion", ""),
+                fixed=v.get("FixedVersion", ""), ids=[v.get("VulnerabilityID")], url=v.get("PrimaryURL", ""),
+            )
+
+
+def parse_zap(data, target):
+    for site in (data or {}).get("site", []):
+        for a in site.get("alerts", []):
+            instances = a.get("instances") or [{}]
+            yield finding(
+                "zap", f"zap-{a.get('pluginid', '')}", ZAP_RISK.get(str(a.get("riskcode")), "medium"), a.get("name", ""),
+                file=instances[0].get("uri", site.get("@name", "")), ids=[f"CWE-{a['cweid']}"] if a.get("cweid") else [],
+                detail=f"{a.get('count', len(instances))} örnek",
+            )
+
+
+def parse_mobsf(data, target):
+    from mobsf_summary import flutter_false_positive
+    for key, sev in (("high", "high"), ("warning", "medium")):
+        for item in (data or {}).get(key, []):
+            if not flutter_false_positive(item):
+                title = str(item.get("title", ""))
+                yield finding("mobsf", f"mobsf-{item.get('section', 'genel')}", sev, title, file=str(item.get("section", "")))
+
+
+def parse_schemathesis(path: Path):
+    """JUnit raporundaki başarısız kontroller; yetki kodları yüksek, diğerleri düşük derecelidir."""
+    from schemathesis_report import AUTHZ_CODES
+    root = ET.parse(path).getroot()
+    for case in root.iter("testcase"):
+        for failure in case.findall("failure"):
+            for code in (failure.get("message") or "").split(", "):
+                yield finding("schemathesis", code or "schemathesis", "high" if code in AUTHZ_CODES else "low",
+                              f"{case.get('name')}: {AUTHZ_CODES.get(code, code)}", file=case.get("name") or "")
 
 
 def parse_dotnet(data, target):
@@ -543,7 +591,8 @@ def main():
 
     findings, problems = [], {}
     parsers = [("gitleaks", parse_gitleaks), ("osv", parse_osv), ("bandit", parse_bandit),
-               ("semgrep", parse_semgrep), ("trivy", parse_trivy)]
+               ("semgrep", parse_semgrep), ("trivy", parse_trivy), ("trivy-image", parse_trivy_image),
+               ("zap", parse_zap), ("mobsf", parse_mobsf), ("sbom", lambda data, target: [])]
     for tool, fn in parsers:
         if (out / REPORT_FILES[tool]).exists():
             findings += read_report(out / REPORT_FILES[tool], tool, fn, target, problems)[1]
@@ -556,6 +605,12 @@ def main():
         resolved[source] = {norm_pkg(d["name"]): d["version"] for d in (data or {}).get("dependencies", []) if d.get("version")}
     for p in sorted(glob.glob(str(out / "dotnet-*.json"))):
         findings += read_report(Path(p), "dotnet", parse_dotnet, target, problems)[1]
+
+    for p in sorted(glob.glob(str(out / "schemathesis" / "*.xml"))):
+        try:
+            findings += list(parse_schemathesis(Path(p)))
+        except ET.ParseError:
+            problems["schemathesis"] = f"{Path(p).name}: rapor okunamadı"
 
     findings, unresolved = drop_unresolved_osv(findings, resolved)
     findings = dedupe(findings)
