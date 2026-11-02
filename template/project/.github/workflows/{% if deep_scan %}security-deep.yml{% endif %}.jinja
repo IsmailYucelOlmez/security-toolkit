@@ -36,6 +36,8 @@ jobs:
 {%- if api_login_url %}
       TEST_USER_EMAIL: {% raw %}${{ secrets.TEST_USER_EMAIL }}{% endraw %}
       TEST_USER_PASSWORD: {% raw %}${{ secrets.TEST_USER_PASSWORD }}{% endraw %}
+      TEST_USER_B_EMAIL: {% raw %}${{ secrets.TEST_USER_B_EMAIL }}{% endraw %}
+      TEST_USER_B_PASSWORD: {% raw %}${{ secrets.TEST_USER_B_PASSWORD }}{% endraw %}
 {%- else %}
       API_AUTH_HEADER: {% raw %}${{ secrets.API_AUTH_HEADER }}{% endraw %}
 {%- endif %}

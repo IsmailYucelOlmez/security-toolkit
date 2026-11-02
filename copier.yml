@@ -18,6 +18,7 @@ _message_after_copy: |
     4. Strix'i kullanacaksanız repo Settings > Secrets bölümüne STRIX_LLM ve LLM_API_KEY ekleyin.
        {%- if api_login_url %}
        Giriş için TEST_USER_EMAIL ve TEST_USER_PASSWORD ekleyin; yalnızca staging'de olan bir hesap kullanın.
+       IDOR kontrolü için ikinci bir staging hesabıyla TEST_USER_B_EMAIL ve TEST_USER_B_PASSWORD ekleyin.
        {%- endif %}
   {%- endif %}
 

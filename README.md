@@ -131,6 +131,7 @@ tetiklemede seçilebilir (LLM maliyeti nedeniyle). Repo secrets:
 | Secret | Gerekli olduğu yer |
 |---|---|
 | `TEST_USER_EMAIL`, `TEST_USER_PASSWORD` | `api_login_url` verilirse: Schemathesis ve ZAP taramadan önce giriş yapıp taze token alır |
+| `TEST_USER_B_EMAIL`, `TEST_USER_B_PASSWORD` | İsteğe bağlı ikinci kullanıcı: Schemathesis'te IDOR kontrolünü açar (`api_login_url` gerekir) |
 | `API_AUTH_HEADER` | Giriş adresi yoksa sabit başlık, ör. API anahtarı |
 | `STRIX_LLM`, `LLM_API_KEY` | Strix |
 
@@ -144,6 +145,21 @@ Test kullanıcısı için:
   geçersiz kılabilir.
 - Giriş başarısız olursa iş durur, kimliksiz taramaya sessizce düşmez. Token ZAP taraması sürerken
   dolarsa yenilenmez; süresini en az bir saat tutun.
+
+### Yetki kontrolleri
+
+Schemathesis işi, kimlik doğrulaması uygulanmayan bir uç (`ST401`) veya başka kullanıcının nesnesini
+okuyabilen bir kullanıcı (`ST402`, IDOR) bulursa başarısız olur. Şema yüklenemezse veya hiçbir işlem
+test edilemezse de başarısız olur. Diğer kontrollerin bulguları yalnızca raporlanır.
+
+IDOR kontrolü yalnızca ikinci kullanıcı tanımlıysa çalışır; yoksa iş özeti bunu açıkça söyler. Bu
+kontrol için API'nin kayıt oluşturup kimliğini döndürmesi (veya kullanıcıya özel liste sunması) ve
+kaydı o kimlikle okuyan bir `GET` ucu olması gerekir. Kontrol okumayı sınar; yazma ve silme için
+[yetki matrisi testlerini](examples/authz/README.md) kullanın. Tasarım gereği paylaşılan kaynaklar
+yanlış pozitif verebilir.
+
+Bulgular takip sistemine gitmez; özet ve artifact'te kalır. Artifact'e yazılmadan önce raporlarda
+test kullanıcısı token'ı aranır, bulunursa rapor yüklenmez.
 
 > ⚠️ Derin tarama hedefe saldırı trafiği gönderir. Yalnızca kendi staging ortamınızı hedefleyin;
 > workflow `authorized: true` olmadan çalışmaz ve test ortamına benzemeyen adresler için uyarır.
@@ -166,6 +182,7 @@ araçların kaçırdığı IDOR / yetkilendirme / toplu atama hatalarını elle 
 
 ```bash
 python -m unittest discover tests -v
+python tests/e2e_authz.py    # pip install "schemathesis>=4.33,<5" gerekir
 shellcheck scripts/*.sh docker/*.sh
 actionlint
 ```

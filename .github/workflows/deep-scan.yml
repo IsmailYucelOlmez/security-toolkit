@@ -2,13 +2,14 @@
 # yalnızca sahibi olduğunuz veya yazılı izniniz olan hedeflerde kullanın.
 #
 # İşler (her biri girdisi verilirse çalışır):
-#   schemathesis  OpenAPI şemasından binlerce uç durum isteği (500 hataları, şema ihlalleri)
+#   schemathesis  OpenAPI şemasından binlerce uç durum isteği (500 hataları, şema ihlalleri); yetki hatasında iş başarısız olur
 #   zap           OWASP ZAP API taraması (şema varsa) veya pasif baseline taraması
 #   strix         Kaynak kod + canlı adres üzerinde AI pentest
 #   mobsf         Flutter APK'sını derleyip MobSF ile statik analiz
 #
 # Repo secrets:
 #   TEST_USER_EMAIL, TEST_USER_PASSWORD  login-url verilirse; her iş taramadan önce giriş yapıp taze token alır
+#   TEST_USER_B_EMAIL, TEST_USER_B_PASSWORD  isteğe bağlı ikinci kullanıcı; Schemathesis'te IDOR kontrolünü açar
 #   API_AUTH_HEADER                 login-url yoksa isteğe bağlı sabit başlık, ör. API anahtarı
 #   STRIX_LLM, LLM_API_KEY          strix için
 name: deep-scan
@@ -74,6 +75,10 @@ on:
         required: false
       TEST_USER_PASSWORD:
         required: false
+      TEST_USER_B_EMAIL:
+        required: false
+      TEST_USER_B_PASSWORD:
+        required: false
       API_AUTH_HEADER:
         required: false
       STRIX_LLM:
@@ -121,20 +126,21 @@ jobs:
     if: inputs.openapi-url != ''
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      HAS_USER_B: ${{ secrets.TEST_USER_B_EMAIL != '' }}
     steps:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - run: pip install -q "schemathesis>=4,<5"
-      # Maskeli değerler job çıktısıyla taşınamadığı için her iş kendi girişini yapar
+      - run: pip install -q "schemathesis>=4.33,<5"
       - uses: actions/checkout@v6
-        if: inputs.login-url != ''
         with:
           repository: ${{ inputs.toolkit-repository || format('{0}/security-toolkit', github.repository_owner) }}
           ref: ${{ inputs.toolkit-ref }}
           path: .security-toolkit
           token: ${{ secrets.TOOLKIT_TOKEN || github.token }}
           persist-credentials: false
+      # Maskeli değerler job çıktısıyla taşınamadığı için her iş kendi girişini yapar
       - name: Test kullanıcısıyla giriş
         id: login
         if: inputs.login-url != ''
@@ -147,33 +153,37 @@ jobs:
           TEST_USER_EMAIL: ${{ secrets.TEST_USER_EMAIL }}
           TEST_USER_PASSWORD: ${{ secrets.TEST_USER_PASSWORD }}
         run: python3 .security-toolkit/scripts/login.py
+      - name: İkinci test kullanıcısıyla giriş
+        id: login_b
+        if: inputs.login-url != '' && env.HAS_USER_B == 'true'
+        env:
+          LOGIN_URL: ${{ inputs.login-url }}
+          LOGIN_FORMAT: ${{ inputs.login-format }}
+          LOGIN_USER_FIELD: ${{ inputs.login-user-field }}
+          LOGIN_PASSWORD_FIELD: ${{ inputs.login-password-field }}
+          LOGIN_TOKEN_FIELD: ${{ inputs.login-token-field }}
+          TEST_USER_EMAIL: ${{ secrets.TEST_USER_B_EMAIL }}
+          TEST_USER_PASSWORD: ${{ secrets.TEST_USER_B_PASSWORD }}
+        run: python3 .security-toolkit/scripts/login.py
       - name: Schemathesis
         env:
-          AUTH: ${{ steps.login.outputs.header || secrets.API_AUTH_HEADER }}
+          AUTH_HEADER_A: ${{ steps.login.outputs.header || secrets.API_AUTH_HEADER }}
+          AUTH_HEADER_B: ${{ steps.login_b.outputs.header }}
           OPENAPI: ${{ inputs.openapi-url }}
           BASE: ${{ inputs.base-url }}
           MAX_TIME: ${{ inputs.schemathesis-max-time }}
-        run: |
-          args=("$OPENAPI" --checks all --max-time "$MAX_TIME" --wait-for-schema 60
-                --report "junit,har" --report-dir deep-reports/schemathesis)
-          [[ -n "$BASE" ]] && args+=(--url "$BASE")
-          [[ -n "$AUTH" ]] && args+=(-H "Authorization: $AUTH")
-          set +e; schemathesis run "${args[@]}"; rc=$?; set -e
-          python3 - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
-          import glob, xml.etree.ElementTree as ET
-          files = glob.glob("deep-reports/schemathesis/*.xml")
-          tests = failures = errors = 0
-          for f in files:
-              root = ET.parse(f).getroot()
-              for s in root.iter("testsuite"):
-                  tests += int(s.get("tests", 0)); failures += int(s.get("failures", 0)); errors += int(s.get("errors", 0))
-          print("## 🧪 Schemathesis\n")
-          print(f"İşlem sayısı: **{tests}** · başarısız: **{failures}** · hata: **{errors}**\n")
-          print("Başarısız durumların yeniden üretim adımları artifact içindeki JUnit raporunda.")
-          EOF
-          echo "Schemathesis çıkış kodu: $rc"
-      - uses: actions/upload-artifact@v7
+        run: bash .security-toolkit/scripts/run_schemathesis.sh
+      - name: Raporlarda token kontrolü
+        id: tokens
         if: always()
+        env:
+          AUTH_HEADER_A: ${{ steps.login.outputs.header || secrets.API_AUTH_HEADER }}
+          AUTH_HEADER_B: ${{ steps.login_b.outputs.header }}
+        run: |
+          mkdir -p deep-reports
+          python3 .security-toolkit/scripts/redact_tokens.py deep-reports --check
+      - uses: actions/upload-artifact@v7
+        if: always() && steps.tokens.outcome == 'success'
         with:
           name: deep-schemathesis
           path: deep-reports/

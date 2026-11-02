@@ -21,6 +21,10 @@ jobs:
         run: diff -u pre-commit/.pre-commit-config.yaml template/project/.pre-commit-config.yaml
       - name: Birim testleri
         run: python -m unittest discover tests -v
+      - name: Uçtan uca yetki testi
+        run: |
+          pip install -q "schemathesis>=4.33,<5"
+          python tests/e2e_authz.py
       - name: Kabuk betikleri
         run: shellcheck -S warning scripts/*.sh docker/*.sh
       - name: Semgrep kurallarını doğrula
