@@ -31,7 +31,17 @@ TOOL_NAMES = {
     "semgrep": "Semgrep (SAST)",
     "trivy": "Trivy (altyapı yapılandırması)",
     "dotnet": "dotnet (NuGet bağımlılıkları)",
+    "dependencies": "Bağımlılık kapsamı",
+    "tarama": "Tarama",
 }
+EXIT_THRESHOLD = 1
+EXIT_INCOMPLETE = 3  # 2 scan.sh'in kullanım hatasıdır
+INCOMPLETE_STATUSES = {"missing", "error", "partial"}
+# Araç "ok" dese bile bu anahtar yoksa çıktı biçimi değişmiş olabilir; sıfır bulgu sayılmamalı
+REPORT_KEYS = {"osv": "results", "bandit": "results", "semgrep": "results",
+               "pip-audit": "dependencies", "dotnet": "projects"}
+REPORT_FILES = {"gitleaks": "gitleaks.json", "osv": "osv.json", "bandit": "bandit.json", "semgrep": "semgrep.json",
+                "trivy": "trivy.json", "pip-audit": "pip-audit-*.json", "dotnet": "dotnet-*.json"}
 
 
 def load_json(path: Path):
@@ -41,6 +51,28 @@ def load_json(path: Path):
     except (OSError, json.JSONDecodeError) as exc:
         print(f"[summarize] {path.name} okunamadı: {exc}", file=sys.stderr)
         return None
+
+
+def report_problem(data, tool) -> str | None:
+    if data is None:
+        return "rapor boş veya okunamadı"
+    expected = list if tool == "gitleaks" else dict
+    if not isinstance(data, expected) or (tool in REPORT_KEYS and REPORT_KEYS[tool] not in data):
+        return "rapor biçimi tanınmadı"
+    return None
+
+
+def read_report(path: Path, tool, parse, target, problems, *extra):
+    """Raporu ayrıştırır; sorun varsa bulgu dönmez, araç için problems'e not düşer."""
+    data = load_json(path)
+    problem = report_problem(data, tool)
+    if not problem:
+        try:
+            return data, list(parse(data, target, *extra))
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            problem = f"rapor ayrıştırılamadı: {type(exc).__name__}"
+    problems[tool] = f"{path.name}: {problem}"
+    return None, []
 
 
 def rel(path: str | None, target: Path) -> str:
@@ -398,13 +430,16 @@ def md_escape(s: str) -> str:
     return str(s).replace("|", "\\|").replace("\n", " ")
 
 
-def to_markdown(active, ignored, statuses, stacks, fail_on, failed, unresolved=()):
+def to_markdown(active, ignored, statuses, stacks, fail_on, failed, unresolved=(), incomplete=()):
     counts = {s: sum(1 for f in active if f["severity"] == s) for s in SEVERITIES}
     lines = ["## 🔐 Güvenlik taraması", ""]
-    verdict = "❌ **Eşik aşıldı**" if failed else "✅ **Eşik aşılmadı**"
+    verdict = "❌ **Eşik aşıldı**" if failed else "⚠️ **Tarama eksik**" if incomplete else "✅ **Eşik aşılmadı**"
     lines.append(f"{verdict} — başarısızlık eşiği: `{fail_on}` · yığınlar: {', '.join(stacks) or '—'}")
     lines.append("")
     lines.append(" · ".join(f"{EMOJI[s]} {s}: **{counts[s]}**" for s in SEVERITIES if s != "info"))
+    if incomplete:
+        names = ", ".join(f"{TOOL_NAMES.get(t, t)} ({st})" for t, st, _ in incomplete)
+        lines.append(f"\n**Şu araçlar tam çalışmadı:** {names}. Bu sonuç temiz tarama sayılmaz.")
     if ignored:
         lines.append(f"\n_{len(ignored)} bulgu `.security-ignore.yml` ile bastırıldı._")
     if unresolved:
@@ -424,6 +459,8 @@ def to_markdown(active, ignored, statuses, stacks, fail_on, failed, unresolved=(
             lines.append(f"| {EMOJI[f['severity']]} {f['severity']} | {f['tool']} | {title} | `{md_escape(where)}` | {fix} |")
         if len(active) > 100:
             lines.append(f"\n_…ve {len(active) - 100} bulgu daha; tamamı `findings.json` içinde._")
+    elif incomplete:
+        lines.append("Çalışan araçlarda bulgu yok, ama tarama eksik.")
     else:
         lines.append("Bulgu yok. 🎉")
     return "\n".join(lines) + "\n"
@@ -434,24 +471,25 @@ def main():
     ap.add_argument("--reports", required=True)
     ap.add_argument("--target", default=".")
     ap.add_argument("--fail-on", default="high", choices=SEVERITIES[:-1] + ["none"])
+    ap.add_argument("--allow-incomplete", action="store_true")
     a = ap.parse_args()
     out, target = Path(a.reports), Path(a.target).resolve()
 
-    findings = []
-    parsers = [("gitleaks.json", parse_gitleaks), ("osv.json", parse_osv), ("bandit.json", parse_bandit),
-               ("semgrep.json", parse_semgrep), ("trivy.json", parse_trivy)]
-    for name, fn in parsers:
-        if (out / name).exists():
-            findings += list(fn(load_json(out / name), target))
+    findings, problems = [], {}
+    parsers = [("gitleaks", parse_gitleaks), ("osv", parse_osv), ("bandit", parse_bandit),
+               ("semgrep", parse_semgrep), ("trivy", parse_trivy)]
+    for tool, fn in parsers:
+        if (out / REPORT_FILES[tool]).exists():
+            findings += read_report(out / REPORT_FILES[tool], tool, fn, target, problems)[1]
     resolved = {}
     for p in sorted(glob.glob(str(out / "pip-audit-*.json"))):
         src = Path(p).with_suffix(".source")
         source = src.read_text(encoding="utf-8").strip() if src.exists() else ""
-        data = load_json(Path(p))
-        findings += list(parse_pip_audit(data, target, source))
+        data, items = read_report(Path(p), "pip-audit", parse_pip_audit, target, problems, source)
+        findings += items
         resolved[source] = {norm_pkg(d["name"]): d["version"] for d in (data or {}).get("dependencies", []) if d.get("version")}
     for p in sorted(glob.glob(str(out / "dotnet-*.json"))):
-        findings += list(parse_dotnet(load_json(Path(p)), target))
+        findings += read_report(Path(p), "dotnet", parse_dotnet, target, problems)[1]
 
     findings, unresolved = drop_unresolved_osv(findings, resolved)
     findings = dedupe(findings)
@@ -467,6 +505,16 @@ def main():
         for row in (out / "_status.tsv").read_text(encoding="utf-8").splitlines():
             parts = row.split("\t") + ["", "", ""]
             statuses.append(tuple(parts[:3]))
+        if not statuses:
+            statuses.append(("tarama", "error", "Seçilen araçların hiçbiri bu projede çalışmadı"))
+    for tool, st, _ in statuses:
+        # "ok" diyen aracın raporu yoksa da sonucu bilinmiyordur
+        if st in ("ok", "partial") and tool in REPORT_FILES and not glob.glob(str(out / REPORT_FILES[tool])):
+            problems.setdefault(tool, "rapor dosyası oluşmadı")
+    seen = {t for t, _, _ in statuses}
+    statuses = [(t, "error", problems[t]) if t in problems else (t, st, n) for t, st, n in statuses]
+    statuses += [(t, "error", note) for t, note in problems.items() if t not in seen]
+    incomplete = [row for row in statuses if row[1] in INCOMPLETE_STATUSES]
     stacks = (out / "_stacks.txt").read_text().split() if (out / "_stacks.txt").exists() else []
 
     failed = a.fail_on != "none" and any(RANK[f["severity"]] <= RANK[a.fail_on] for f in active)
@@ -475,11 +523,11 @@ def main():
     (out / "findings.json").write_text(json.dumps({
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
         "target": str(target), "stacks": stacks, "fail_on": a.fail_on, "failed": failed,
-        "counts": counts, "tools": [{"tool": t, "status": s, "note": n} for t, s, n in statuses],
+        "complete": not incomplete, "counts": counts, "tools": [{"tool": t, "status": s, "note": n} for t, s, n in statuses],
         "findings": active, "ignored": ignored, "unresolved_osv": unresolved,
     }, ensure_ascii=False, indent=2), encoding="utf-8")
     (out / "findings.sarif").write_text(json.dumps(to_sarif(active), indent=2), encoding="utf-8")
-    md = to_markdown(active, ignored, statuses, stacks, a.fail_on, failed, unresolved)
+    md = to_markdown(active, ignored, statuses, stacks, a.fail_on, failed, unresolved, incomplete)
     (out / "summary.md").write_text(md, encoding="utf-8")
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
@@ -487,8 +535,16 @@ def main():
 
     print(md)
     print(f"[summarize] Raporlar: {out}")
-    sys.exit(1 if failed else 0)
+    # --fail-on none yalnızca raporlama modudur; eksiklik raporda görünür ama işi kırmaz
+    if incomplete and a.fail_on != "none" and not a.allow_incomplete:
+        sys.exit(EXIT_INCOMPLETE)
+    sys.exit(EXIT_THRESHOLD if failed else 0)
 
 
 if __name__ == "__main__":
-    main()
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # Windows konsolunda emojiler kilitlenmesin
+    try:
+        main()
+    except Exception as exc:  # kilitlenme "eşik aşıldı" (1) ile karışmamalı
+        print(f"[summarize] Özet oluşturulamadı: {type(exc).__name__}: {exc}", file=sys.stderr)
+        sys.exit(EXIT_INCOMPLETE)

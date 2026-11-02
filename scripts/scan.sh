@@ -3,16 +3,18 @@
 # tek bir rapora (summary.md, findings.json, findings.sarif) toplar.
 #
 #   scripts/scan.sh [--path DIR] [--out DIR] [--fail-on high] [--diff-base REF]
-#                   [--skip semgrep,trivy] [--only gitleaks,bandit]
+#                   [--skip semgrep,trivy] [--only gitleaks,bandit] [--allow-incomplete]
 #
 #   --fail-on    critical | high | medium | low | none  (varsayılan: high)
 #   --diff-base  Sadece REF..HEAD arasındaki commit'lerde sır ara (PR'lar için)
+#   --allow-incomplete  Eksik taramayı başarısız sayma (ağsız ortamlar; raporda yine görünür)
 #
 # Ortam değişkenleri:
 #   SEMGREP_CONFIG   Semgrep kural seti (varsayılan: p/default). Ağ yoksa yalnızca yerel kurallar.
 #   SECURITY_TOOLS_DIR  install-tools.sh kurulum dizini (PATH'e otomatik eklenir)
 #
-# Çıkış kodu: 0 = eşik üstü bulgu yok, 1 = eşik üstü bulgu var, 2 = kullanım hatası
+# Çıkış kodu: 0 = eşik üstü bulgu yok, 1 = eşik üstü bulgu var, 2 = kullanım hatası,
+#             3 = tarama eksik (araç yok/hatalı, rapor okunamadı, kilit dosyası yok)
 set -uo pipefail
 
 TOOLKIT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -22,6 +24,7 @@ FAIL_ON="high"
 DIFF_BASE=""
 SKIP=""
 ONLY=""
+ALLOW_INCOMPLETE=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -31,7 +34,8 @@ while [[ $# -gt 0 ]]; do
     --diff-base) DIFF_BASE="$2"; shift ;;
     --skip) SKIP="$2"; shift ;;
     --only) ONLY="$2"; shift ;;
-    -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+    --allow-incomplete) ALLOW_INCOMPLETE=(--allow-incomplete) ;;
+    -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
     *) echo "Bilinmeyen seçenek: $1" >&2; exit 2 ;;
   esac
   shift
@@ -118,6 +122,37 @@ if enabled osv; then
   else status osv missing "osv-scanner kurulu değil"; fi
 fi
 
+# ---------------------------------------------------------------- bağımlılık kapsamı
+# Kilit dosyası olmayan manifest OSV'ye görünmez; "kilit dosyası yok" temiz sonuç sanılmamalı
+has_nearby() {  # has_nearby <dizin> <desen>...  (dizinde veya TARGET'a kadar üst dizinlerde; workspace kilitleri kökte olur)
+  local dir="$1" p f; shift
+  while :; do
+    for p in "$@"; do
+      for f in "$dir"/$p; do [[ -e "$f" ]] && return 0; done
+    done
+    [[ "$dir" == "$TARGET" || "$dir" == "/" ]] && return 1
+    dir="$(dirname "$dir")"
+  done
+}
+if enabled osv; then
+  PY_LOCKS=('requirements*.txt' poetry.lock uv.lock pdm.lock Pipfile.lock pylock.toml)
+  uncovered=()
+  while IFS= read -r m; do
+    locks=()
+    case "$(basename "$m")" in
+      pyproject.toml) grep -Eq '^dependencies[[:space:]]*=|^\[tool\.poetry\.dependencies\]' "$m" && locks=("${PY_LOCKS[@]}") ;;
+      setup.py) grep -q 'install_requires' "$m" && locks=("${PY_LOCKS[@]}") ;;
+      Pipfile) locks=("${PY_LOCKS[@]}") ;;
+      pubspec.yaml) locks=(pubspec.lock) ;;
+      package.json) grep -q 'ependencies"' "$m" && locks=(package-lock.json yarn.lock pnpm-lock.yaml bun.lock) ;;
+    esac
+    [[ ${#locks[@]} -gt 0 ]] && ! has_nearby "$(dirname "$m")" "${locks[@]}" && uncovered+=("${m#"$TARGET"/}")
+  done < <(find_files pyproject.toml setup.py Pipfile pubspec.yaml package.json)
+  if [[ ${#uncovered[@]} -gt 0 ]]; then
+    status dependencies error "kilit dosyası olmadığı için taranmadı: ${uncovered[*]:0:5}"
+  fi
+fi
+
 # ---------------------------------------------------------------- pip-audit (requirements*.txt)
 if enabled pip-audit && has_stack python; then
   if have pip-audit; then
@@ -195,4 +230,4 @@ if enabled dotnet && has_stack dotnet; then
 fi
 
 # ---------------------------------------------------------------- özet
-"$PYTHON" "$TOOLKIT_DIR/scripts/summarize.py" --reports "$OUT" --target "$TARGET" --fail-on "$FAIL_ON"
+"$PYTHON" "$TOOLKIT_DIR/scripts/summarize.py" --reports "$OUT" --target "$TARGET" --fail-on "$FAIL_ON" "${ALLOW_INCOMPLETE[@]}"

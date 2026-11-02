@@ -28,8 +28,8 @@ bash "$TK/scripts/scan.sh" --path . --fail-on none
 ```
 
 Proje `security-reports/findings.json` zaten yeni bir CI çıktısıysa (ör. kullanıcı indirip verdi)
-yeniden çalıştırmak yerine onu kullan. `findings.json` içindeki `tools` listesinde `missing`/`error`
-olan araçları raporda açıkça söyle — kör noktalar bulgular kadar önemlidir.
+yeniden çalıştırmak yerine onu kullan. `findings.json` içinde `complete: false` ise `tools` listesinde
+`missing`/`error`/`partial` olan araçları raporda açıkça söyle — kör noktalar bulgular kadar önemlidir.
 
 ## 3. Bulguları doğrula (en önemli adım)
 

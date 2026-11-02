@@ -1,5 +1,6 @@
 """python3 -m unittest discover tests"""
 import importlib.util
+import json
 import os
 import shutil
 import subprocess
@@ -34,6 +35,88 @@ class ScanArgumentsTest(unittest.TestCase):
         ignore.write_text("ozel\n")
         scan("--path", ".", "--only", "bandit", "--fail-on", "none", cwd=self.tmp)
         self.assertEqual(ignore.read_text(), "ozel\n")
+
+
+class FailClosedTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.tools = self.tmp / "tools"
+        (self.tools / "bin").mkdir(parents=True)
+        self.project = self.tmp / "proje"
+        self.project.mkdir()
+
+    def run_scan(self, *args):
+        # Makinede kurulu araçlar sonucu değiştirmesin: gitleaks ve osv-scanner bulunan dizinler PATH'ten çıkar
+        dirs = [d for d in os.environ["PATH"].split(os.pathsep)
+                if not any(shutil.which(t, path=d) for t in ("gitleaks", "osv-scanner"))]
+        env = {**os.environ, "PYTHONUTF8": "1", "SECURITY_TOOLS_DIR": str(self.tools), "PATH": os.pathsep.join(dirs)}
+        proc = subprocess.run([shutil.which("bash"), str(ROOT / "scripts" / "scan.sh"), "--path", str(self.project), *args],
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
+        reports = self.project / "security-reports"
+        findings = reports / "findings.json"
+        return proc, json.loads(findings.read_text(encoding="utf-8")) if findings.exists() else None
+
+    def stub_osv(self, rc):
+        stub = self.tools / "bin" / "osv-scanner"
+        stub.write_text(f'#!/usr/bin/env bash\necho \'{{"results": []}}\'\nexit {rc}\n', newline="\n")
+        stub.chmod(0o755)
+
+    def tool_status(self, data, tool):
+        return next((t["status"] for t in data["tools"] if t["tool"] == tool), None)
+
+    def test_missing_tool_fails_closed(self):
+        proc, data = self.run_scan("--only", "gitleaks")
+        self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
+        self.assertFalse(data["complete"])
+        self.assertNotIn("Bulgu yok", proc.stdout)
+
+    def test_allow_incomplete_flag_reaches_summary(self):
+        proc, data = self.run_scan("--only", "gitleaks", "--allow-incomplete")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertFalse(data["complete"])
+        self.assertIn("Tarama eksik", proc.stdout)
+
+    def test_manifest_without_lock_is_incomplete(self):
+        self.stub_osv(128)
+        cases = {"pyproject.toml": '[project]\nname = "a"\ndependencies = ["fastapi"]\n',
+                 "pubspec.yaml": "name: a\ndependencies:\n  http: any\n",
+                 "package.json": '{"dependencies": {"a": "1"}}\n'}
+        for name, text in cases.items():
+            with self.subTest(name):
+                (self.project / name).write_text(text)
+                proc, data = self.run_scan("--only", "osv")
+                self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
+                self.assertEqual(self.tool_status(data, "dependencies"), "error")
+                (self.project / name).unlink()
+
+    def test_lock_files_cover_manifest(self):
+        self.stub_osv(0)
+        (self.project / "pyproject.toml").write_text('[project]\ndependencies = ["fastapi"]\n')
+        (self.project / "uv.lock").write_text("")
+        pkg = self.project / "packages" / "a"
+        pkg.mkdir(parents=True)
+        (pkg / "package.json").write_text('{"dependencies": {"a": "1"}}\n')
+        (self.project / "package-lock.json").write_text("{}")  # workspace kilidi kökte
+        proc, data = self.run_scan("--only", "osv")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIsNone(self.tool_status(data, "dependencies"))
+
+    def test_project_without_dependencies_is_clean(self):
+        self.stub_osv(128)
+        (self.project / "pyproject.toml").write_text('[tool.ruff]\nline-length = 100\n')
+        (self.project / "a.py").write_text("print(1)\n")
+        proc, data = self.run_scan("--only", "osv")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertTrue(data["complete"])
+
+    def test_skipping_osv_disables_coverage_check(self):
+        (self.project / "pubspec.yaml").write_text("name: a\n")
+        (self.tools / "bin" / "gitleaks").write_text('#!/usr/bin/env bash\necho "[]" > "$(printf "%s\\n" "$@" | sed -n "/gitleaks.json/p")"\n', newline="\n")
+        (self.tools / "bin" / "gitleaks").chmod(0o755)
+        proc, data = self.run_scan("--only", "gitleaks")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertTrue(data["complete"])
 
 
 class RelTest(unittest.TestCase):

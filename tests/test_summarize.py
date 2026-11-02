@@ -112,5 +112,92 @@ class UnresolvedOsvTest(unittest.TestCase):
         self.assertEqual((found["tool"], found["version"], found["severity"]), ("pip-audit", "0.0.33", "high"))
 
 
+class IncompleteScanTest(unittest.TestCase):
+    """Çalışmayan tarama hiçbir zaman temiz sonuç gibi görünmemeli."""
+
+    def summarize(self, statuses=None, files=None, *args):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        if statuses is not None:
+            (tmp / "_status.tsv").write_text("".join(f"{t}\t{s}\t\n" for t, s in statuses), encoding="utf-8")
+        for name, text in (files or {}).items():
+            (tmp / name).write_text(text, encoding="utf-8")
+        proc = subprocess.run([sys.executable, str(ROOT / "scripts" / "summarize.py"), "--reports", str(tmp),
+                               "--target", str(tmp), *args], capture_output=True, text=True, encoding="utf-8",
+                              env={**os.environ, "PYTHONUTF8": "1"})
+        data = json.loads((tmp / "findings.json").read_text(encoding="utf-8")) if (tmp / "findings.json").exists() else None
+        return proc, data
+
+    def assert_incomplete(self, proc, data):
+        self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
+        self.assertFalse(data["complete"])
+        self.assertNotIn("Bulgu yok", proc.stdout)
+        self.assertNotIn("Eşik aşılmadı", proc.stdout)
+
+    def test_all_ok_is_clean(self):
+        proc, data = self.summarize([("gitleaks", "ok")], {"gitleaks.json": "[]"})
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        self.assertTrue(data["complete"])
+        self.assertIn("Bulgu yok", proc.stdout)
+
+    def test_missing_error_and_partial_are_incomplete(self):
+        for st in ("missing", "error", "partial"):
+            with self.subTest(st):
+                self.assert_incomplete(*self.summarize([("semgrep", st)], {"semgrep.json": '{"results": []}'}))
+
+    def test_legit_skip_is_clean(self):
+        proc, data = self.summarize([("gitleaks", "ok"), ("osv", "skipped")], {"gitleaks.json": "[]"})
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        self.assertTrue(data["complete"])
+
+    def test_no_tool_ran_is_incomplete(self):
+        self.assert_incomplete(*self.summarize([]))
+
+    def test_truncated_report_is_incomplete(self):
+        proc, data = self.summarize([("gitleaks", "ok")], {"gitleaks.json": '[{"RuleID": "a"'})
+        self.assert_incomplete(proc, data)
+        self.assertEqual(data["tools"][0]["status"], "error")
+
+    def test_empty_or_changed_report_is_incomplete(self):
+        for text in ("", '{"sonuclar": []}', '["beklenmeyen"]'):
+            with self.subTest(text):
+                self.assert_incomplete(*self.summarize([("semgrep", "ok")], {"semgrep.json": text}))
+
+    def test_report_missing_for_ok_tool_is_incomplete(self):
+        self.assert_incomplete(*self.summarize([("bandit", "ok")]))
+
+    def test_unexpected_entry_does_not_crash(self):
+        self.assert_incomplete(*self.summarize([("gitleaks", "ok")], {"gitleaks.json": '["beklenmeyen"]'}))
+
+    def test_corrupt_report_without_status_file_is_incomplete(self):
+        self.assert_incomplete(*self.summarize(None, {"osv.json": "{"}))
+
+    def test_incomplete_outranks_threshold_but_keeps_findings(self):
+        leak = '[{"RuleID": "a", "File": "x", "StartLine": 1}]'
+        proc, data = self.summarize([("gitleaks", "ok"), ("semgrep", "missing")], {"gitleaks.json": leak})
+        self.assertEqual(proc.returncode, 3)
+        self.assertEqual(len(data["findings"]), 1)
+        self.assertIn("Eşik aşıldı", proc.stdout)
+
+    def test_allow_incomplete_exits_by_threshold_but_still_warns(self):
+        proc, data = self.summarize([("semgrep", "missing")], None, "--allow-incomplete")
+        self.assertEqual(proc.returncode, 0)
+        self.assertFalse(data["complete"])
+        self.assertIn("Tarama eksik", proc.stdout)
+        leak = '[{"RuleID": "a", "File": "x", "StartLine": 1}]'
+        proc, _ = self.summarize([("gitleaks", "ok"), ("semgrep", "missing")], {"gitleaks.json": leak}, "--allow-incomplete")
+        self.assertEqual(proc.returncode, 1)
+
+    def test_fail_on_none_reports_without_failing(self):
+        proc, data = self.summarize([("semgrep", "missing")], None, "--fail-on", "none")
+        self.assertEqual(proc.returncode, 0)
+        self.assertFalse(data["complete"])
+        self.assertIn("Tarama eksik", proc.stdout)
+
+    def test_crash_is_not_threshold_exit(self):
+        proc, _ = self.summarize([("gitleaks", "ok")], {"gitleaks.json": "[]", ".security-ignore.yml": "- id: [kapanmamis\n"})
+        self.assertNotEqual(proc.returncode, 1, proc.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

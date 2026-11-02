@@ -109,6 +109,23 @@ bash scripts/scan.sh --path ~/projeler/rubricator --fail-on high
 Aynı açık birden çok araçtan gelirse tek kayda indirilir; bir paketin tüm açıkları tek satırda,
 gereken en düşük güvenli sürümle gösterilir.
 
+### Çıkış kodları
+
+| Kod | Anlamı |
+|---|---|
+| `0` | Tarama tamam, eşik üstü bulgu yok |
+| `1` | Eşik üstü bulgu var |
+| `2` | Kullanım hatası |
+| `3` | Tarama eksik: araç yok veya hata verdi, Semgrep yalnızca yerel kurallarla çalıştı, rapor okunamadı, manifestin kilit dosyası yok ya da hiçbir araç çalışmadı |
+
+Eksik tarama eşik aşımından önce gelir ve temiz sonuç olarak gösterilmez. Eldeki bulgular yine rapora yazılır,
+`findings.json` içinde `complete: false` olur. Çalışmayan aracın Security sekmesindeki uyarıları kapanmasın diye
+eksik taramanın SARIF'i yüklenmez. Public repoda iş özetinde yalnızca araç adı ve durumu görünür.
+
+Bir aracı bilerek çalıştırmıyorsanız `--skip` kullanın; atlanan araç eksiklik sayılmaz. `--skip osv` kilit dosyası
+kontrolünü de kapatır. Ağsız ortamlarda `--allow-incomplete` eksikliği başarısızlık saymaz, raporda uyarı kalır.
+`--fail-on none` yalnızca raporlama modudur ve eksik taramada da `0` döner.
+
 ## Docker
 
 ```bash
@@ -214,8 +231,12 @@ sohbete yazmayın; `~/.config/security-toolkit/staging-users.env` dosyasına koy
 - pip-audit önem derecesi vermez; OSV-Scanner aynı açığı bulursa onun derecesi kullanılır,
   bulamazsa `medium` sayılır.
 - `packages.config` kullanan eski .NET Framework projeleri `dotnet list package` ile taranamaz;
-  bu projeler için OSV-Scanner ve Semgrep sonuçları geçerlidir.
-- Semgrep kural kayıt defterine ulaşamazsa yalnızca yerel kurallarla çalışır ve bunu raporda belirtir.
+  bu projeler için OSV-Scanner ve Semgrep sonuçları geçerlidir. Tarama bu projelerde `3` döner; `--skip dotnet`
+  (workflow'da `skip: dotnet`) ile çalıştırın.
+- Semgrep kural kayıt defterine ulaşamazsa yalnızca yerel kurallarla çalışır, bunu raporda belirtir ve tarama `3`
+  döner. Ağsız ortamlarda `--allow-incomplete` kullanın.
+- Kilit dosyası kontrolü `pyproject.toml`, `setup.py`, `Pipfile`, `pubspec.yaml` ve `package.json` dosyalarına bakar;
+  kilit dosyası aynı dizinde veya üst dizinlerde aranır. Bağımlılık tanımlamayan `pyproject.toml` ve `package.json` atlanır.
 
 ## Geliştirme
 

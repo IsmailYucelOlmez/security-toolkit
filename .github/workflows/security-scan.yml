@@ -142,12 +142,19 @@ jobs:
           if [[ "$HIDE_REPORTS" == "false" ]]; then
             bash .security-toolkit/scripts/scan.sh "${args[@]}"
           else
-            unset GITHUB_STEP_SUMMARY
-            bash .security-toolkit/scripts/scan.sh "${args[@]}" > /dev/null
+            env -u GITHUB_STEP_SUMMARY bash .security-toolkit/scripts/scan.sh "${args[@]}" > /dev/null
           fi
           rc=$?
           set -e
           [[ $rc -eq 1 ]] && echo "failed=true" >> "$GITHUB_OUTPUT" || echo "failed=false" >> "$GITHUB_OUTPUT"
+          [[ $rc -eq 3 ]] && echo "incomplete=true" >> "$GITHUB_OUTPUT" || echo "incomplete=false" >> "$GITHUB_OUTPUT"
+          if [[ "$HIDE_REPORTS" != "false" ]]; then
+            # Araç notları dosya yolu içerebilir; public repoda yalnızca araç ve durum yazılır
+            { echo "### Araç durumu"; jq -r '.tools[] | "- \(.tool): \(.status)"' security-reports/findings.json || echo "- rapor oluşmadı"; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [[ $rc -eq 3 ]]; then
+            echo "::error::Tarama eksik: en az bir araç çalışmadı veya raporu okunamadı. Bu sonuç temiz tarama sayılmaz; araç durumu iş özetinde."
+          fi
           [[ $rc -gt 1 ]] && exit $rc || true
 
       - name: Raporları yükle
@@ -159,8 +166,9 @@ jobs:
           retention-days: 30
 
       # Okuma yetkisi olan herkes PR'daki Code Scanning notlarını görür; public repoda PR taraması yüklenmez.
+      # Eksik tarama yüklenmez: çalışmayan aracın eski uyarıları düzeltilmiş gibi kapanırdı.
       - name: Code Scanning'e yükle
-        if: always() && hashFiles('security-reports/findings.sarif') != '' && ((steps.visibility.outputs.value == 'public' && github.event_name != 'pull_request') || (steps.visibility.outputs.hide == 'false' && inputs.upload-sarif))
+        if: always() && steps.scan.outputs.incomplete == 'false' && hashFiles('security-reports/findings.sarif') != '' && ((steps.visibility.outputs.value == 'public' && github.event_name != 'pull_request') || (steps.visibility.outputs.hide == 'false' && inputs.upload-sarif))
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: security-reports/findings.sarif
