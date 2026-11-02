@@ -35,4 +35,4 @@ schemathesis "${global[@]}" run "${args[@]}"
 rc=$?
 echo "Schemathesis çıkış kodu: $rc"
 
-"$PYTHON" "$HERE/schemathesis_report.py" "$OUT" "$rc" "${peers[@]}" >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}"
+"$PYTHON" "$HERE/schemathesis_report.py" "$OUT" "$rc" "${peers[@]}" --openapi "$OPENAPI" >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}"

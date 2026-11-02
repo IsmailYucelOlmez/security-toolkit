@@ -62,6 +62,50 @@ class ReportTest(unittest.TestCase):
         self.assertIn("IDOR kontrolü çalışmadı", proc.stdout)
 
 
+class ReportGateTest(ReportTest):
+    def test_no_report_fails_even_with_exit_zero(self):
+        proc = run("schemathesis_report.py", self.dir, 0, "--peers")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("Tarama çalışamadı", proc.stdout)
+
+    def test_zero_operations_fails_even_with_exit_zero(self):
+        empty = '<testsuites tests="0"><testsuite name="s" tests="0" failures="0" errors="0"/></testsuites>'
+        proc = self.report(empty, 0, "--peers")
+        self.assertEqual(proc.returncode, 1)
+
+    def test_corrupt_report_fails(self):
+        proc = self.report("<testsuites", 0, "--peers")
+        self.assertEqual(proc.returncode, 1)
+
+    def test_undeclared_security_is_listed(self):
+        schema = self.dir / "openapi.json"
+        schema.write_text(json.dumps({"paths": {
+            "/acik": {"get": {}},
+            "/kapali": {"get": {"security": [{"b": []}]}, "parameters": []},
+        }}), encoding="utf-8")
+        proc = self.report(ONLY_OTHER, 1, "--peers", "--openapi", schema.as_uri())
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("`GET /acik`", proc.stdout)
+        self.assertNotIn("`GET /kapali`", proc.stdout)
+
+
+class MobsfSummaryTest(unittest.TestCase):
+    def test_flutter_false_positives_are_dropped_and_counted(self):
+        card = Path(tempfile.mkdtemp()) / "card.json"
+        card.write_text(json.dumps({"security_score": 50, "high": [
+            {"title": "Stack canary eksik", "description": "libapp.so", "section": "binary"},
+            {"title": "Uygulama yedeklenebilir", "section": "manifest"},
+            {"title": "libapp.so gömülü anahtar içeriyor", "section": "secrets"},
+        ], "warning": [{"title": "RELRO", "description": "libapp.so"}]}), encoding="utf-8")
+        proc = run("mobsf_summary.py", card)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("yüksek: **2**", proc.stdout)
+        self.assertIn("uyarı: **0**", proc.stdout)
+        self.assertIn("2 `libapp.so`", proc.stdout)
+        self.assertIn("gömülü anahtar", proc.stdout)
+        self.assertNotIn("Stack canary", proc.stdout)
+
+
 class ConfigTest(unittest.TestCase):
     def test_writes_two_peers(self):
         out = Path(tempfile.mkdtemp())

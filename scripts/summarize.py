@@ -613,7 +613,8 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # Windows konsolunda emojiler kilitlenmesin
+    for stream in (sys.stdout, sys.stderr):  # Windows konsolunda emojiler ve yerel hata metinleri kilitlenmesin
+        stream.reconfigure(encoding="utf-8", errors="replace")
     try:
         main()
     except Exception as exc:  # kilitlenme "eşik aşıldı" (1) ile karışmamalı

@@ -1,7 +1,8 @@
 """Yetki matrisi örneğinin üzerinde çalıştığı küçük FastAPI uygulaması. Projenizde kullanılmaz."""
 from fastapi import Depends, FastAPI, Header, HTTPException
 
-TOKENS = {"owner-token": "owner", "other-token": "other", "admin-token": "admin"}
+TOKENS = {"owner-token": "owner", "other-token": "other", "admin-token": "admin", "outsider-token": "outsider"}
+TENANTS = {"owner": "a", "other": "a", "admin": "a", "outsider": "b"}
 orders: dict[int, dict] = {}
 app = FastAPI()
 
@@ -23,6 +24,20 @@ def own_order(order_id: int, user: str = Depends(current_user)) -> dict:
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.post("/orders", status_code=201)
+def create_order(payload: dict, user: str = Depends(current_user)):
+    order_id = max(orders, default=0) + 1
+    orders[order_id] = {"id": order_id, "text": payload.get("text", ""), "owner": user, "tenant": TENANTS[user]}
+    return orders[order_id]
+
+
+@app.get("/tenants/{tenant_id}/orders")
+def tenant_orders(tenant_id: str, user: str = Depends(current_user)):
+    if TENANTS[user] != tenant_id:
+        raise HTTPException(404, "yok")
+    return [o for o in orders.values() if o["tenant"] == tenant_id]
 
 
 @app.get("/orders/{order_id}")

@@ -205,8 +205,11 @@ Test kullanıcısı için:
 ### Yetki kontrolleri
 
 Schemathesis işi, kimlik doğrulaması uygulanmayan bir uç (`ST401`) veya başka kullanıcının nesnesini
-okuyabilen bir kullanıcı (`ST402`, IDOR) bulursa başarısız olur. Şema yüklenemezse veya hiçbir işlem
+okuyabilen bir kullanıcı (`ST402`, IDOR) bulursa başarısız olur. Şema yüklenemezse, rapor okunamazsa veya hiçbir işlem
 test edilemezse de başarısız olur. Diğer kontrollerin bulguları yalnızca raporlanır.
+
+Her taramadan önce aynı akış bilerek açıklı yerel bir API'de çalışır; IDOR orada bulunamazsa iş durur. Şemada güvenlik
+bildirmeyen uçlar iş özetinde listelenir, çünkü `ST401` bunlar için sonuç üretmeyebilir.
 
 IDOR kontrolü yalnızca ikinci kullanıcı tanımlıysa çalışır; yoksa iş özeti bunu açıkça söyler. Bu
 kontrol için API'nin kayıt oluşturup kimliğini döndürmesi (veya kullanıcıya özel liste sunması) ve
@@ -227,19 +230,26 @@ kontroller Schemathesis, [yetki matrisi](examples/authz/README.md) ve skill ile 
   taranır. Bu yüzden yalnızca staging hesabı ve kısa ömürlü token kullanın.
 - Giriş bilgisi yoksa canlı test girişsiz yüzeyle sınırlı kalır, iş özeti bunu belirtir.
 - Token'lar artifact'ten önce maskelenir, telemetri kapalıdır, artifact 14 gün saklanır.
-- Bulgu işi başarısız yapmaz, özette yazar. Tarama çalışamazsa iş başarısız olur.
+- Yalnızca elle tetiklenir; PR ve zamanlanmış çalışmada başlamaz. Sandbox konteynerleri yalnızca DNS ve staging adreslerine
+  çıkabilir (`scripts/strix_egress.sh`); LLM çağrıları konteyner dışından gider.
+- Doğrulanmış bulgu ve çalışamayan tarama işi başarısız yapar. Yalnızca raporlamak için `strix-fail-on-finding: false` verin.
 
 > ⚠️ Derin tarama hedefe saldırı trafiği gönderir. Yalnızca kendi staging ortamınızı hedefleyin;
 > workflow `authorized: true` olmadan çalışmaz ve test ortamına benzemeyen adresler için uyarır.
 
 ## Claude skill'i
 
+Kurulum: `skills/security-review` klasörünü `~/.claude/skills/` altına kopyalayın ve `SECURITY_TOOLKIT_DIR` değişkenine bu
+reponun yolunu verin. Copier skill'i kurmaz.
+
 `skills/security-review/SKILL.md` — taramayı çalıştırır, her bulguyu kodu okuyarak doğrular,
 araçların kaçırdığı IDOR / yetkilendirme / toplu atama hatalarını elle arar ve düzeltme önerir.
 "Bu projenin güvenliğini incele" demeniz yeterli.
 
 "Bulguları staging'de kanıtla" derseniz iki test kullanıcısıyla istek atıp açığı doğrular. Her
-oturumda hedef onayı ister, varsayılan olarak yalnızca okuma isteği gönderir. Kullanıcı bilgilerini
+oturumda hedef onayı ister, varsayılan olarak yalnızca okuma isteği gönderir. İstekler `scripts/staging_request.py`
+üzerinden gider: adres, 50 istek sınırı ve yazma onayı bu betikte uygulanır. Betik, modelin başka bir komut çalıştırmasını
+engellemez; daha sıkı sınır için Claude Code izinlerinde `curl` ve benzerlerini reddedin. Kullanıcı bilgilerini
 sohbete yazmayın; `~/.config/security-toolkit/staging-users.env` dosyasına koyun. Token'lar
 `~/.cache/security-toolkit/` altında tutulur, iş bitince silinir. Windows'ta dosya izinleri
 (`chmod 600`) bu dosyaları korumaz; yalnızca staging hesabı kullanın.
@@ -262,7 +272,7 @@ sohbete yazmayın; `~/.config/security-toolkit/staging-users.env` dosyasına koy
 python -m unittest discover tests -v
 semgrep --test --metrics=off --config rules/semgrep tests/semgrep
 python tests/contract.py     # install-tools.sh gerekir: gerçek araç çıktılarını sınar
-python tests/e2e_authz.py    # pip install "schemathesis>=4.33,<5" gerekir
+python tests/e2e_authz.py    # pip install -r scripts/requirements-deep.txt gerekir
 shellcheck scripts/*.sh docker/*.sh
 actionlint
 ```

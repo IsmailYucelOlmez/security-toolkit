@@ -1,0 +1,2 @@
+# Derin tarama araçları; Dependabot günceller.
+schemathesis==4.33.0

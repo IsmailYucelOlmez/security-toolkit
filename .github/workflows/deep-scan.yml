@@ -60,6 +60,10 @@ on:
       strix-scan-mode:
         type: string
         default: quick
+      strix-fail-on-finding:
+        description: "Strix'in doğrulanmış bulgusu işi başarısız yapsın"
+        type: boolean
+        default: true
       flutter-dir:
         description: "Flutter projesinin dizini (boşsa MobSF çalışmaz)"
         type: string
@@ -132,7 +136,6 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
-      - run: pip install -q "schemathesis>=4.33,<5"
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           repository: ${{ inputs.toolkit-repository || format('{0}/security-toolkit', github.repository_owner) }}
@@ -140,6 +143,10 @@ jobs:
           path: .security-toolkit
           token: ${{ secrets.TOOLKIT_TOKEN || github.token }}
           persist-credentials: false
+      - run: pip install -q -r .security-toolkit/scripts/requirements-deep.txt
+      # Bilerek açıklı yerel API'de IDOR bulunamıyorsa staging sonucuna güvenilemez
+      - name: Kanarya
+        run: python3 .security-toolkit/tests/e2e_authz.py
       # Maskeli değerler job çıktısıyla taşınamadığı için her iş kendi girişini yapar
       - name: Test kullanıcısıyla giriş
         id: login
@@ -268,7 +275,8 @@ jobs:
 
   strix:
     needs: guard
-    if: inputs.strix
+    # Yalnızca elle: PR tetiklemesinde güvenilmeyen kod, LLM anahtarı ve token aynı işte birleşirdi
+    if: inputs.strix && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
@@ -316,8 +324,13 @@ jobs:
           TEST_USER_EMAIL: ${{ secrets.TEST_USER_B_EMAIL }}
           TEST_USER_PASSWORD: ${{ secrets.TEST_USER_B_PASSWORD }}
         run: python3 .security-toolkit/scripts/login.py
+      - name: Sandbox ağ çıkışını sınırla
+        env:
+          BASE: ${{ inputs.base-url }}
+        run: bash .security-toolkit/scripts/strix_egress.sh
       - name: Strix AI pentest
         env:
+          STRIX_FAIL_ON_FINDING: ${{ inputs.strix-fail-on-finding }}
           STRIX_LLM: ${{ secrets.STRIX_LLM }}
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           STRIX_TELEMETRY: "false"
@@ -360,6 +373,13 @@ jobs:
       MOBSF_API_KEY: ci-only-local-key
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          repository: ${{ inputs.toolkit-repository || format('{0}/security-toolkit', github.repository_owner) }}
+          ref: ${{ inputs.toolkit-ref }}
+          path: .security-toolkit
+          token: ${{ secrets.TOOLKIT_TOKEN || github.token }}
+          persist-credentials: false
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           channel: stable
@@ -379,14 +399,7 @@ jobs:
           curl -sSf "${H[@]}" -X POST --data "hash=$hash" http://localhost:8000/api/v1/report_json -o "$GITHUB_WORKSPACE/deep-reports/mobsf.json"
           curl -sSf "${H[@]}" -X POST --data "hash=$hash" http://localhost:8000/api/v1/scorecard -o "$GITHUB_WORKSPACE/deep-reports/mobsf-scorecard.json"
           curl -sSf "${H[@]}" -X POST --data "hash=$hash" http://localhost:8000/api/v1/download_pdf -o "$GITHUB_WORKSPACE/deep-reports/mobsf.pdf" || true
-          python3 - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
-          import json, os
-          s = json.load(open(os.path.join(os.environ["GITHUB_WORKSPACE"], "deep-reports/mobsf-scorecard.json")))
-          print("## 📱 MobSF\n")
-          print(f"Güvenlik puanı: **{s.get('security_score', '?')}/100** · yüksek: **{len(s.get('high', []))}** · uyarı: **{len(s.get('warning', []))}**\n")
-          for item in s.get("high", [])[:15]:
-              print(f"- 🟠 {item.get('title')} ({item.get('section', '')})")
-          EOF
+          python3 "$GITHUB_WORKSPACE/.security-toolkit/scripts/mobsf_summary.py" "$GITHUB_WORKSPACE/deep-reports/mobsf-scorecard.json" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:

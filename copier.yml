@@ -9,6 +9,7 @@ _subdirectory: template/project
 _answers_file: .security-toolkit-answers.yml
 _skip_if_exists:
   - .security-ignore.yml   # projeye özgü bastırmalar güncellemede ezilmez
+  - tests/test_authz_matrix.py   # proje için doldurulan matris güncellemede ezilmez
 _message_after_copy: |
   Güvenlik yapılandırması eklendi. Sonraki adımlar:
     1. pip install pre-commit && pre-commit install
@@ -77,6 +78,12 @@ docker_dir:
   help: Dockerfile dizini
   default: /
   when: "{{ 'docker' in stacks }}"
+
+authz_matrix:
+  type: bool
+  help: FastAPI yetki matrisi testi (tests/test_authz_matrix.py) eklensin mi? Projeye göre doldurmanız gerekir
+  default: false
+  when: "{{ 'python' in stacks }}"
 
 fail_on:
   type: str
