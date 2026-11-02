@@ -1,5 +1,6 @@
 """python3 -m unittest discover tests"""
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -64,6 +65,51 @@ class SummarizeTest(unittest.TestCase):
         for r in sarif["runs"]:
             for rule in r["tool"]["driver"]["rules"]:
                 self.assertIn("security-severity", rule["properties"])
+
+
+class UnresolvedOsvTest(unittest.TestCase):
+    """OSV `>=0.0.9` için 0.0.9'u, pip-audit gerçekten kurulacak sürümü görür."""
+
+    def summarize(self, osv_version="0.0.9", audit=None):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        (tmp / "osv.json").write_text(json.dumps({"results": [{
+            "source": {"path": "requirements.txt"},
+            "packages": [{"package": {"name": "python-multipart", "version": osv_version},
+                          "vulnerabilities": [{"id": "GHSA-a", "aliases": ["CVE-1"], "database_specific": {"severity": "HIGH"}}]}],
+        }]}))
+        if audit is not None:
+            (tmp / "pip-audit-0.json").write_text(json.dumps({"dependencies": audit}))
+            (tmp / "pip-audit-0.source").write_text("requirements.txt")
+        proc = subprocess.run([sys.executable, str(ROOT / "scripts" / "summarize.py"), "--reports", str(tmp),
+                               "--target", str(tmp)], capture_output=True, text=True, encoding="utf-8",
+                              env={**os.environ, "PYTHONUTF8": "1"})
+        return proc, json.loads((tmp / "findings.json").read_text(encoding="utf-8"))
+
+    def test_other_resolved_version_drops_finding(self):
+        proc, data = self.summarize(audit=[{"name": "python_multipart", "version": "0.0.33", "vulns": []}])
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        self.assertEqual(data["findings"], [])
+        self.assertEqual(len(data["unresolved_osv"]), 1)
+        self.assertIn("1 OSV bulgusu atlandı", proc.stdout)
+
+    def test_pinned_version_keeps_finding(self):
+        proc, data = self.summarize(audit=[{"name": "python-multipart", "version": "0.0.9", "vulns": []}])
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(data["unresolved_osv"], [])
+        self.assertEqual(data["findings"][0]["severity"], "high")
+
+    def test_without_pip_audit_keeps_finding(self):
+        proc, data = self.summarize()
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(len(data["findings"]), 1)
+
+    def test_vulnerability_in_resolved_version_keeps_osv_severity(self):
+        vuln = {"id": "PYSEC-1", "aliases": ["CVE-1"], "fix_versions": ["0.0.40"]}
+        proc, data = self.summarize(audit=[{"name": "python-multipart", "version": "0.0.33", "vulns": [vuln]}])
+        self.assertEqual(proc.returncode, 1)
+        found = data["findings"][0]
+        self.assertEqual((found["tool"], found["version"], found["severity"]), ("pip-audit", "0.0.33", "high"))
 
 
 if __name__ == "__main__":

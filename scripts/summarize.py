@@ -220,6 +220,25 @@ def norm_pkg(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name.lower())
 
 
+def drop_unresolved_osv(findings, resolved):
+    """OSV, requirements dosyasındaki `>=` aralığını alt sınır sürüm gibi okur; kurulacak sürümü pip-audit çözer.
+
+    Aynı dosyada sürümler farklıysa OSV bulgusu kurulmayacak bir sürüme aittir ve düşürülür. Sürüm
+    sabitlenmişse ikisi aynı sürümü görür, bulgu korunur. pip-audit raporu yoksa da korunur.
+    """
+    kept, dropped = [], []
+    for f in findings:
+        got = resolved.get(f["file"], {}).get(norm_pkg(f["package"]))
+        (dropped if f["tool"] == "osv" and got and got != f["version"] else kept).append(f)
+    for d in dropped:
+        # pip-audit derece vermez; açık kurulacak sürümde de varsa OSV'nin derecesi korunmalı
+        for f in kept:
+            if (f["tool"] == "pip-audit" and f["file"] == d["file"] and norm_pkg(f["package"]) == norm_pkg(d["package"])
+                    and set(f["ids"]) & set(d["ids"])):
+                f["severity"] = d["severity"]
+    return kept, dropped
+
+
 def dedupe(findings):
     """Aynı paket+açık birden çok araçtan gelirse tek kayda indirger, en yüksek dereceyi tutar."""
     out, index = [], {}
@@ -379,7 +398,7 @@ def md_escape(s: str) -> str:
     return str(s).replace("|", "\\|").replace("\n", " ")
 
 
-def to_markdown(active, ignored, statuses, stacks, fail_on, failed):
+def to_markdown(active, ignored, statuses, stacks, fail_on, failed, unresolved=()):
     counts = {s: sum(1 for f in active if f["severity"] == s) for s in SEVERITIES}
     lines = ["## 🔐 Güvenlik taraması", ""]
     verdict = "❌ **Eşik aşıldı**" if failed else "✅ **Eşik aşılmadı**"
@@ -388,6 +407,9 @@ def to_markdown(active, ignored, statuses, stacks, fail_on, failed):
     lines.append(" · ".join(f"{EMOJI[s]} {s}: **{counts[s]}**" for s in SEVERITIES if s != "info"))
     if ignored:
         lines.append(f"\n_{len(ignored)} bulgu `.security-ignore.yml` ile bastırıldı._")
+    if unresolved:
+        lines.append(f"\n_{len(unresolved)} OSV bulgusu atlandı: pip-audit bu paketleri başka sürüme çözdü."
+                     " Sürümleri kilit dosyasıyla sabitlemek kurulumu tekrarlanabilir kılar._")
     lines += ["", "<details><summary>Araç durumu</summary>", "", "| Araç | Durum | Not |", "|---|---|---|"]
     icon = {"ok": "✅", "partial": "⚠️", "skipped": "⏭️", "missing": "➖", "error": "❌"}
     for tool, st, note in statuses:
@@ -421,13 +443,17 @@ def main():
     for name, fn in parsers:
         if (out / name).exists():
             findings += list(fn(load_json(out / name), target))
+    resolved = {}
     for p in sorted(glob.glob(str(out / "pip-audit-*.json"))):
         src = Path(p).with_suffix(".source")
-        findings += list(parse_pip_audit(load_json(Path(p)), target,
-                                         src.read_text(encoding="utf-8").strip() if src.exists() else ""))
+        source = src.read_text(encoding="utf-8").strip() if src.exists() else ""
+        data = load_json(Path(p))
+        findings += list(parse_pip_audit(data, target, source))
+        resolved[source] = {norm_pkg(d["name"]): d["version"] for d in (data or {}).get("dependencies", []) if d.get("version")}
     for p in sorted(glob.glob(str(out / "dotnet-*.json"))):
         findings += list(parse_dotnet(load_json(Path(p)), target))
 
+    findings, unresolved = drop_unresolved_osv(findings, resolved)
     findings = dedupe(findings)
     ignores = load_ignores(target)
     active, ignored = [], []
@@ -450,10 +476,10 @@ def main():
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
         "target": str(target), "stacks": stacks, "fail_on": a.fail_on, "failed": failed,
         "counts": counts, "tools": [{"tool": t, "status": s, "note": n} for t, s, n in statuses],
-        "findings": active, "ignored": ignored,
+        "findings": active, "ignored": ignored, "unresolved_osv": unresolved,
     }, ensure_ascii=False, indent=2), encoding="utf-8")
     (out / "findings.sarif").write_text(json.dumps(to_sarif(active), indent=2), encoding="utf-8")
-    md = to_markdown(active, ignored, statuses, stacks, a.fail_on, failed)
+    md = to_markdown(active, ignored, statuses, stacks, a.fail_on, failed, unresolved)
     (out / "summary.md").write_text(md, encoding="utf-8")
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
