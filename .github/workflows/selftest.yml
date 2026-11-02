@@ -25,6 +25,10 @@ jobs:
         run: |
           pip install -q "schemathesis>=4.33,<5"
           python tests/e2e_authz.py
+      - name: Yetki matrisi örneği
+        run: |
+          pip install -q fastapi httpx pytest
+          pytest examples/authz -q
       - name: Kabuk betikleri
         run: shellcheck -S warning scripts/*.sh docker/*.sh
       - name: Semgrep kurallarını doğrula
