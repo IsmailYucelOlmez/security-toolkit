@@ -170,6 +170,12 @@ test kullanıcısı token'ı aranır, bulunursa rapor yüklenmez.
 araçların kaçırdığı IDOR / yetkilendirme / toplu atama hatalarını elle arar ve düzeltme önerir.
 "Bu projenin güvenliğini incele" demeniz yeterli.
 
+"Bulguları staging'de kanıtla" derseniz iki test kullanıcısıyla istek atıp açığı doğrular. Her
+oturumda hedef onayı ister, varsayılan olarak yalnızca okuma isteği gönderir. Kullanıcı bilgilerini
+sohbete yazmayın; `~/.config/security-toolkit/staging-users.env` dosyasına koyun. Token'lar
+`~/.cache/security-toolkit/` altında tutulur, iş bitince silinir. Windows'ta dosya izinleri
+(`chmod 600`) bu dosyaları korumaz; yalnızca staging hesabı kullanın.
+
 ## Bilinen sınırlar
 
 - pip-audit önem derecesi vermez; OSV-Scanner aynı açığı bulursa onun derecesi kullanılır,
