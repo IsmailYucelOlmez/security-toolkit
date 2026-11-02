@@ -200,6 +200,55 @@ class IncompleteScanTest(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 1, proc.stderr)
 
 
+class BaselineTest(unittest.TestCase):
+    def rule(self, line, message="m"):
+        return {"check_id": "r", "path": "a.py", "start": {"line": line}, "extra": {"severity": "ERROR", "message": message}}
+
+    def summarize(self, results, baseline=None):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        (tmp / "semgrep.json").write_text(json.dumps({"results": results}), encoding="utf-8")
+        args = ["--baseline", str(baseline)] if baseline else []
+        proc = subprocess.run([sys.executable, str(ROOT / "scripts" / "summarize.py"), "--reports", str(tmp),
+                               "--target", str(tmp), *args], capture_output=True, text=True, encoding="utf-8")
+        keep = Path(tempfile.mkdtemp()) / "findings.json"
+        self.addCleanup(shutil.rmtree, keep.parent, ignore_errors=True)
+        keep.write_text((tmp / "findings.json").read_text(encoding="utf-8"), encoding="utf-8")
+        sarif = json.loads((tmp / "findings.sarif").read_text(encoding="utf-8"))
+        return proc, json.loads(keep.read_text(encoding="utf-8")), keep, sarif
+
+    def test_existing_finding_does_not_fail_even_if_line_moved(self):
+        _, _, base, _ = self.summarize([self.rule(1)])
+        proc, data, _, _ = self.summarize([self.rule(50)], base)
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        self.assertTrue(data["baseline"])
+        self.assertFalse(data["findings"][0]["new"])
+
+    def test_new_finding_fails(self):
+        _, _, base, _ = self.summarize([self.rule(1)])
+        proc, data, _, _ = self.summarize([self.rule(1), self.rule(9, "baska")], base)
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(sum(f["new"] for f in data["findings"]), 1)
+        self.assertIn("1 yeni", proc.stdout)
+        self.assertIn("🆕", proc.stdout)
+
+    def test_second_occurrence_of_same_rule_is_new(self):
+        _, _, base, _ = self.summarize([self.rule(1)])
+        proc, _, _, _ = self.summarize([self.rule(1), self.rule(2)], base)
+        self.assertEqual(proc.returncode, 1)
+
+    def test_unreadable_baseline_counts_everything_as_new(self):
+        missing = Path(tempfile.gettempdir()) / "yok-security-toolkit.json"
+        proc, data, _, _ = self.summarize([self.rule(1)], missing)
+        self.assertEqual(proc.returncode, 1)
+        self.assertFalse(data["baseline"])
+
+    def test_sarif_has_partial_fingerprints(self):
+        _, data, _, sarif = self.summarize([self.rule(1)])
+        result = sarif["runs"][0]["results"][0]
+        self.assertEqual(result["partialFingerprints"]["securityToolkit/v1"], data["findings"][0]["fingerprint"])
+
+
 class SuppressionTest(unittest.TestCase):
     RULE = {"check_id": "rules.semgrep.kural-a", "path": "a.py", "start": {"line": 1},
             "extra": {"severity": "ERROR", "message": "m", "metadata": {"cwe": ["CWE-489: debug"]}}}

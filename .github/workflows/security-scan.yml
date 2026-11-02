@@ -29,6 +29,10 @@ on:
         description: "PR'a özet yorumu yaz/güncelle (public repoda yazılmaz)"
         type: boolean
         default: true
+      new-findings-only:
+        description: "PR'da eşiği yalnızca taban dalda olmayan bulgulara uygula; mevcut bulgular push ve zamanlanmış taramalarda raporlanır"
+        type: boolean
+        default: true
       toolkit-repository:
         description: "Toolkit reposu (boşsa <sahip>/security-toolkit)"
         type: string
@@ -126,6 +130,19 @@ jobs:
       - name: PATH
         run: echo "$SECURITY_TOOLS_DIR/bin" >> "$GITHUB_PATH"
 
+      # Sır taraması PR'da zaten yalnızca yeni commit'lere bakar. Taban taranamazsa tüm bulgular yeni sayılır.
+      - name: Taban dalı tara
+        if: github.event_name == 'pull_request' && inputs.new-findings-only
+        shell: bash
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          SCAN_PATH: ${{ inputs.path }}
+          SKIP: ${{ inputs.skip }}
+        run: |
+          git worktree add -q "$RUNNER_TEMP/base" "origin/$BASE_REF"
+          env -u GITHUB_STEP_SUMMARY bash .security-toolkit/scripts/scan.sh --path "$RUNNER_TEMP/base/$SCAN_PATH" \
+            --out "$RUNNER_TEMP/base-reports" --fail-on none --skip "gitleaks,$SKIP" > /dev/null 2>&1 || true
+
       - name: Tara
         id: scan
         shell: bash
@@ -137,6 +154,7 @@ jobs:
           [[ -n "${{ inputs.skip }}" ]] && args+=(--skip "${{ inputs.skip }}")
           # PR'larda sır taraması yalnızca yeni commit'lere bakar (geçmiş, push/schedule taramasında taranır)
           [[ -n "$BASE_REF" ]] && args+=(--diff-base "origin/$BASE_REF")
+          [[ -n "$BASE_REF" && "${{ inputs.new-findings-only }}" == "true" ]] && args+=(--baseline "$RUNNER_TEMP/base-reports/findings.json")
           set +e
           if [[ "$HIDE_REPORTS" == "false" ]]; then
             bash .security-toolkit/scripts/scan.sh "${args[@]}"

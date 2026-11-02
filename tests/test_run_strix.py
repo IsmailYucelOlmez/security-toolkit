@@ -1,13 +1,14 @@
 """python3 -m unittest discover tests"""
 import os
-import shutil
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
+from support import find_bash
+
 ROOT = Path(__file__).resolve().parents[1]
-BASH = shutil.which("bash")
+BASH = find_bash()
 # Gerçek Strix yerine: argümanları ve talimat dosyasını kaydeder, istenen kodla çıkar
 STUB = """#!/usr/bin/env bash
 printf '%s\\n' "$@" > "$STUB_DIR/args"

@@ -4,6 +4,8 @@ on:
   pull_request:
   push:
     branches: [main]
+  schedule:
+    - cron: "23 5 * * 1"   # haftalık: araç çıktıları ve kural kayıt defteri değişmiş mi
 
 permissions:
   contents: read
@@ -35,6 +37,7 @@ jobs:
         run: |
           pip install -q -r scripts/requirements-tools.txt
           semgrep --validate --metrics=off --config rules/semgrep
+          semgrep --test --metrics=off --config rules/semgrep tests/semgrep
       - name: Araç kurulumu çalışıyor mu
         run: bash scripts/install-tools.sh && ~/.security-tools/bin/gitleaks version && ~/.security-tools/bin/osv-scanner --version && ~/.security-tools/bin/trivy --version
       - name: Özeti tutmayan araç kurulmuyor mu
@@ -46,6 +49,8 @@ jobs:
             echo "::error::Bozuk özetle kurulum başarılı oldu"; exit 1
           fi
           test ! -e "$work/tools/bin/osv-scanner"
+      - name: Gerçek araçlarla sözleşme testi
+        run: PATH="$HOME/.security-tools/bin:$PATH" python tests/contract.py
       - name: Şablon kendi taramasından geçiyor mu
         run: |
           pip install -q copier

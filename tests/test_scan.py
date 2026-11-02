@@ -8,11 +8,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from support import find_bash
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def scan(*args, cwd):
-    return subprocess.run([shutil.which("bash"), str(ROOT / "scripts" / "scan.sh"), *args], cwd=cwd,
+    return subprocess.run([find_bash(), str(ROOT / "scripts" / "scan.sh"), *args], cwd=cwd,
                           capture_output=True, text=True, encoding="utf-8", errors="replace",
                           env={**os.environ, "PYTHONUTF8": "1"})
 
@@ -51,7 +53,7 @@ class FailClosedTest(unittest.TestCase):
         dirs = [d for d in os.environ["PATH"].split(os.pathsep)
                 if not any(shutil.which(t, path=d) for t in ("gitleaks", "osv-scanner"))]
         env = {**os.environ, "PYTHONUTF8": "1", "SECURITY_TOOLS_DIR": str(self.tools), "PATH": os.pathsep.join(dirs)}
-        proc = subprocess.run([shutil.which("bash"), str(ROOT / "scripts" / "scan.sh"), "--path", str(self.project), *args],
+        proc = subprocess.run([find_bash(), str(ROOT / "scripts" / "scan.sh"), "--path", str(self.project), *args],
                               capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
         reports = self.project / "security-reports"
         findings = reports / "findings.json"

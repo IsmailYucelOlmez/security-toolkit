@@ -4,10 +4,12 @@
 #
 #   scripts/scan.sh [--path DIR] [--out DIR] [--fail-on high] [--diff-base REF]
 #                   [--skip semgrep,trivy] [--only gitleaks,bandit] [--allow-incomplete]
+#                   [--baseline FILE]
 #
 #   --fail-on    critical | high | medium | low | none  (varsayılan: high)
 #   --diff-base  Sadece REF..HEAD arasındaki commit'lerde sır ara (PR'lar için)
 #   --allow-incomplete  Eksik taramayı başarısız sayma (ağsız ortamlar; raporda yine görünür)
+#   --baseline   Taban dalın findings.json dosyası; eşik yalnızca yeni bulgulara uygulanır
 #
 # Ortam değişkenleri:
 #   SEMGREP_CONFIG   Semgrep kural seti (varsayılan: p/default). Ağ yoksa yalnızca yerel kurallar.
@@ -24,7 +26,7 @@ FAIL_ON="high"
 DIFF_BASE=""
 SKIP=""
 ONLY=""
-ALLOW_INCOMPLETE=()
+SUMMARY_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -34,8 +36,9 @@ while [[ $# -gt 0 ]]; do
     --diff-base) DIFF_BASE="$2"; shift ;;
     --skip) SKIP="$2"; shift ;;
     --only) ONLY="$2"; shift ;;
-    --allow-incomplete) ALLOW_INCOMPLETE=(--allow-incomplete) ;;
-    -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
+    --allow-incomplete) SUMMARY_ARGS+=(--allow-incomplete) ;;
+    --baseline) SUMMARY_ARGS+=(--baseline "$2"); shift ;;
+    -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
     *) echo "Bilinmeyen seçenek: $1" >&2; exit 2 ;;
   esac
   shift
@@ -230,4 +233,4 @@ if enabled dotnet && has_stack dotnet; then
 fi
 
 # ---------------------------------------------------------------- özet
-"$PYTHON" "$TOOLKIT_DIR/scripts/summarize.py" --reports "$OUT" --target "$TARGET" --fail-on "$FAIL_ON" "${ALLOW_INCOMPLETE[@]}"
+"$PYTHON" "$TOOLKIT_DIR/scripts/summarize.py" --reports "$OUT" --target "$TARGET" --fail-on "$FAIL_ON" "${SUMMARY_ARGS[@]}"

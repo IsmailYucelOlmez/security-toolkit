@@ -14,6 +14,7 @@ import argparse
 import datetime as dt
 import fnmatch
 import glob
+import hashlib
 import json
 import os
 import re
@@ -352,6 +353,28 @@ def group_by_package(findings):
     return out
 
 
+def add_fingerprints(findings):
+    """Satır kaymasından etkilenmeyen kimlik üretir; aynı dosyadaki aynı kural sıra numarasıyla ayrılır."""
+    seen = {}
+    for f in sorted(findings, key=lambda x: x["line"] or 0):
+        if f["package"]:
+            parts = [f["tool"], f["rule_id"], f["package"], f["version"], *f.get("locations", [f["file"]])]
+        else:
+            parts = [f["tool"], f["rule_id"], f["file"], f["title"]]
+        key = "\0".join(str(p) for p in parts)
+        seen[key] = seen.get(key, 0) + 1
+        f["fingerprint"] = hashlib.sha256(f"{key}\0{seen[key]}".encode()).hexdigest()[:32]
+
+
+def load_baseline(path: Path):
+    """Taban taramasındaki parmak izleri. Okunamazsa None: bütün bulgular yeni sayılır."""
+    data = load_json(path)
+    if not isinstance(data, dict) or not isinstance(data.get("findings"), list):
+        print(f"[summarize] Taban çizgisi okunamadı, tüm bulgular yeni sayılıyor: {path}", file=sys.stderr)
+        return None
+    return {f.get("fingerprint") for f in data["findings"]}
+
+
 # ------------------------------------------------------------------ bastırma
 def ignore_problem(it) -> str | None:
     """Uygulanamayacak kaydın nedenini döner. Bu kayıtlar bulguyu bastırmaz, raporda listelenir."""
@@ -448,7 +471,10 @@ def to_sarif(findings):
                 loc["physicalLocation"]["region"] = {"startLine": int(f["line"])}
             others = [{"physicalLocation": {"artifactLocation": {"uri": p}}} for p in f.get("locations", []) if p != f["file"]]
             msg = f["title"] + (f" → düzeltilmiş sürüm: {f['fixed_version']}" if f["fixed_version"] else "")
-            results.append({"ruleId": rid, "level": level[f["severity"]], "message": {"text": msg}, "locations": [loc, *others]})
+            result = {"ruleId": rid, "level": level[f["severity"]], "message": {"text": msg}, "locations": [loc, *others]}
+            if f.get("fingerprint"):
+                result["partialFingerprints"] = {"securityToolkit/v1": f["fingerprint"]}
+            results.append(result)
         for r in rules.values():
             if not r["helpUri"]:
                 del r["helpUri"]
@@ -460,13 +486,16 @@ def md_escape(s: str) -> str:
     return str(s).replace("|", "\\|").replace("\n", " ")
 
 
-def to_markdown(active, ignored, statuses, stacks, fail_on, failed, unresolved=(), incomplete=(), ignore_issues=()):
+def to_markdown(active, ignored, statuses, stacks, fail_on, failed, unresolved=(), incomplete=(), ignore_issues=(), baseline=False):
     counts = {s: sum(1 for f in active if f["severity"] == s) for s in SEVERITIES}
     lines = ["## 🔐 Güvenlik taraması", ""]
     verdict = "❌ **Eşik aşıldı**" if failed else "⚠️ **Tarama eksik**" if incomplete else "✅ **Eşik aşılmadı**"
     lines.append(f"{verdict} — başarısızlık eşiği: `{fail_on}` · yığınlar: {', '.join(stacks) or '—'}")
     lines.append("")
     lines.append(" · ".join(f"{EMOJI[s]} {s}: **{counts[s]}**" for s in SEVERITIES if s != "info"))
+    if baseline:
+        fresh = sum(1 for f in active if f["new"])
+        lines.append(f"\nTaban dala göre **{fresh} yeni**, {len(active) - fresh} mevcut bulgu. Eşik yalnızca yeni bulgulara uygulanır.")
     if incomplete:
         names = ", ".join(f"{TOOL_NAMES.get(t, t)} ({st})" for t, st, _ in incomplete)
         lines.append(f"\n**Şu araçlar tam çalışmadı:** {names}. Bu sonuç temiz tarama sayılmaz.")
@@ -491,7 +520,8 @@ def to_markdown(active, ignored, statuses, stacks, fail_on, failed, unresolved=(
             where += f" +{len(others) - 3} konum" if len(others) > 3 else ""
             fix = f"`{f['fixed_version']}`" if f["fixed_version"] else ""
             title = f"[{md_escape(f['title'][:110])}]({f['url']})" if f["url"] else md_escape(f["title"][:110])
-            lines.append(f"| {EMOJI[f['severity']]} {f['severity']} | {f['tool']} | {title} | `{md_escape(where)}` | {fix} |")
+            mark = "🆕 " if baseline and f["new"] else ""
+            lines.append(f"| {mark}{EMOJI[f['severity']]} {f['severity']} | {f['tool']} | {title} | `{md_escape(where)}` | {fix} |")
         if len(active) > 100:
             lines.append(f"\n_…ve {len(active) - 100} bulgu daha; tamamı `findings.json` içinde._")
     elif incomplete:
@@ -507,6 +537,7 @@ def main():
     ap.add_argument("--target", default=".")
     ap.add_argument("--fail-on", default="high", choices=SEVERITIES[:-1] + ["none"])
     ap.add_argument("--allow-incomplete", action="store_true")
+    ap.add_argument("--baseline", type=Path, help="Taban dalın findings.json dosyası; eşik yalnızca yeni bulgulara uygulanır")
     a = ap.parse_args()
     out, target = Path(a.reports), Path(a.target).resolve()
 
@@ -534,6 +565,10 @@ def main():
         reason = is_ignored(f, ignores)
         (ignored if reason else active).append({**f, "ignored_reason": reason} if reason else f)
     active = group_by_package(active)
+    add_fingerprints(active)
+    known = load_baseline(a.baseline) if a.baseline else None
+    for f in active:
+        f["new"] = known is None or f["fingerprint"] not in known
 
     statuses = []
     if (out / "_status.tsv").exists():
@@ -552,18 +587,18 @@ def main():
     incomplete = [row for row in statuses if row[1] in INCOMPLETE_STATUSES]
     stacks = (out / "_stacks.txt").read_text().split() if (out / "_stacks.txt").exists() else []
 
-    failed = a.fail_on != "none" and any(RANK[f["severity"]] <= RANK[a.fail_on] for f in active)
+    failed = a.fail_on != "none" and any(f["new"] and RANK[f["severity"]] <= RANK[a.fail_on] for f in active)
     counts = {s: sum(1 for f in active if f["severity"] == s) for s in SEVERITIES}
 
     (out / "findings.json").write_text(json.dumps({
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
         "target": str(target), "stacks": stacks, "fail_on": a.fail_on, "failed": failed,
-        "complete": not incomplete, "counts": counts, "tools": [{"tool": t, "status": s, "note": n} for t, s, n in statuses],
+        "complete": not incomplete, "baseline": known is not None, "counts": counts, "tools": [{"tool": t, "status": s, "note": n} for t, s, n in statuses],
         "findings": active, "ignored": ignored, "unresolved_osv": unresolved,
         "suppression_issues": ignore_issues,
     }, ensure_ascii=False, indent=2), encoding="utf-8")
     (out / "findings.sarif").write_text(json.dumps(to_sarif(active), indent=2), encoding="utf-8")
-    md = to_markdown(active, ignored, statuses, stacks, a.fail_on, failed, unresolved, incomplete, ignore_issues)
+    md = to_markdown(active, ignored, statuses, stacks, a.fail_on, failed, unresolved, incomplete, ignore_issues, known is not None)
     (out / "summary.md").write_text(md, encoding="utf-8")
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:

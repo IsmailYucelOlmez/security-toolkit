@@ -115,6 +115,13 @@ bash scripts/scan.sh --path ~/projeler/rubricator --fail-on high
 Aynı açık birden çok araçtan gelirse tek kayda indirilir; bir paketin tüm açıkları tek satırda,
 gereken en düşük güvenli sürümle gösterilir. Açık birden çok manifestteyse tüm konumlar raporda ve `locations` alanında listelenir.
 
+### Yeni ve mevcut bulgular
+
+PR'da taban dal da taranır ve eşik yalnızca yeni bulgulara uygulanır: yeni yayımlanan bir CVE ilgisiz PR'ı kırmaz, mevcut
+bulgular push ve zamanlanmış taramalarda raporlanır. Taban taranamazsa tüm bulgular yeni sayılır. Bunu kapatmak için
+workflow'a `new-findings-only: false` verin. Yerelde: `scan.sh --baseline eski/findings.json`. Her bulgunun satır
+kaymasından etkilenmeyen `fingerprint` değeri vardır; SARIF'te `partialFingerprints` olarak yazılır.
+
 ### Çıkış kodları
 
 | Kod | Anlamı |
@@ -253,6 +260,8 @@ sohbete yazmayın; `~/.config/security-toolkit/staging-users.env` dosyasına koy
 
 ```bash
 python -m unittest discover tests -v
+semgrep --test --metrics=off --config rules/semgrep tests/semgrep
+python tests/contract.py     # install-tools.sh gerekir: gerçek araç çıktılarını sınar
 python tests/e2e_authz.py    # pip install "schemathesis>=4.33,<5" gerekir
 shellcheck scripts/*.sh docker/*.sh
 actionlint

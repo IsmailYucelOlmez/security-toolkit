@@ -69,4 +69,5 @@ rules:
       Bağlantı cümlesinde parola açık yazılmış. Windows kimlik doğrulaması (Integrated Security),
       kullanıcı gizli anahtarları veya ortam değişkeni kullanın.
     metadata: {cwe: ['CWE-798: Use of Hard-coded Credentials'], category: security, confidence: MEDIUM, impact: HIGH}
-    pattern-regex: "(?i)(password|pwd)\\s*=\\s*(?!\\s*;)(?!\\{)[^;\"'<>]{3,};"
+    # Yalnızca metin veya XML değeri içindeki atama: `password = GetPassword();` gibi kod eşleşmez
+    pattern-regex: "(?i)[\"'][^\"'\\n]*\\b(password|pwd)\\s*=\\s*(?!\\{)[^;\"'<>\\s]{3,}"

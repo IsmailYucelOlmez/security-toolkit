@@ -5,7 +5,6 @@ Kurulu Schemathesis gerektirdiği için birim testlerinden ayrı çalışır: py
 Bu test olmadan IDOR kontrolünün sessizce hiçbir şey sınamadığı fark edilemez.
 """
 import os
-import shutil
 import socket
 import subprocess
 import sys
@@ -14,9 +13,11 @@ import time
 import urllib.request
 from pathlib import Path
 
+from support import find_bash
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
-BASH = shutil.which("bash")
+BASH = find_bash()
 ENV = {**os.environ, "PYTHONUTF8": "1", "PYTHON": sys.executable}
 
 
