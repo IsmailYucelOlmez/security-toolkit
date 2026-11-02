@@ -77,6 +77,12 @@ Her proje taramada toolkit'teki kodu çalıştırır; bu yüzden şablon şunlar
   sabitleme için tam commit SHA'sı girin. Elle kurulumda `uses: ...@` ve `toolkit-ref` aynı olmalı;
   `toolkit-ref` verilmezse betikler `main`'den gelir.
 - **Yalnızca gereken secret'lar:** `secrets: inherit` kullanılmaz, her secret açıkça aktarılır.
+- **Araç bütünlüğü:** Gitleaks, OSV-Scanner ve Trivy `scripts/tool-checksums.txt` içindeki sürümle kurulur, SHA-256
+  özeti tutmayan dosya kurulmaz. Yükseltmek için sürüm notlarını okuyup
+  `bash scripts/update-tool-checksums.sh <gitleaks> <osv-scanner> <trivy>` çalıştırın. Aksiyonlar commit SHA'sıyla,
+  taban imaj, ZAP ve MobSF digest ile sabittir. Dependabot aksiyonları ve Dockerfile'ı günceller; ZAP digest'ini ve
+  checksum dosyasını güncellemez. `dotnet-install.sh` ile Python araçlarının paketleri özetle doğrulanmaz, Python araçları
+  yalnızca sürümle sabittir.
 
 ### Public projelerde raporlar
 

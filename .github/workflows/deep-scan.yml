@@ -129,11 +129,11 @@ jobs:
     env:
       HAS_USER_B: ${{ secrets.TEST_USER_B_EMAIL != '' }}
     steps:
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
       - run: pip install -q "schemathesis>=4.33,<5"
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           repository: ${{ inputs.toolkit-repository || format('{0}/security-toolkit', github.repository_owner) }}
           ref: ${{ inputs.toolkit-ref }}
@@ -182,7 +182,7 @@ jobs:
         run: |
           mkdir -p deep-reports
           python3 .security-toolkit/scripts/redact_tokens.py deep-reports --check
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always() && steps.tokens.outcome == 'success'
         with:
           name: deep-schemathesis
@@ -194,7 +194,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         if: inputs.login-url != ''
         with:
           repository: ${{ inputs.toolkit-repository || format('{0}/security-toolkit', github.repository_owner) }}
@@ -232,7 +232,8 @@ jobs:
             cmd=(zap-baseline.py -t "$BASE")
           fi
           set +e
-          docker run --rm "${envs[@]}" -v "$PWD/zap:/zap/wrk:rw" ghcr.io/zaproxy/zaproxy:stable \
+          # Dependabot bu satırı göremez; digest'i elle güncelleyin
+          docker run --rm "${envs[@]}" -v "$PWD/zap:/zap/wrk:rw" ghcr.io/zaproxy/zaproxy:stable@sha256:030d3df57735dacbb83464854758e674dd9ad01d79d12a129a8e58b1fd384238 \
             "${cmd[@]}" -J zap.json -x zap.xml -r zap.html -I
           set -e
           python3 - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
@@ -250,7 +251,7 @@ jobs:
               if a.get("riskcode") in ("3", "2"):
                   print(f"- {risk[a['riskcode']]} — {a.get('name')} ({a.get('count', '?')} örnek)")
           EOF
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: deep-zap
@@ -264,18 +265,18 @@ jobs:
     env:
       HAS_USER_B: ${{ secrets.TEST_USER_B_EMAIL != '' }}
     steps:
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
       # Sürüm sandbox imajını da sabitler
       - name: Strix kur
         run: pip install -q "strix-agent==1.7.0"
       # Toolkit taranmasın diye proje ayrı dizine alınır
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           path: project
           persist-credentials: false
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           repository: ${{ inputs.toolkit-repository || format('{0}/security-toolkit', github.repository_owner) }}
           ref: ${{ inputs.toolkit-ref }}
@@ -327,7 +328,7 @@ jobs:
         run: |
           mkdir -p strix_runs
           python3 .security-toolkit/scripts/redact_tokens.py strix_runs
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always() && steps.tokens.outcome == 'success'
         with:
           name: deep-strix
@@ -342,15 +343,15 @@ jobs:
     timeout-minutes: 45
     services:
       mobsf:
-        image: opensecurity/mobile-security-framework-mobsf:latest
+        image: opensecurity/mobile-security-framework-mobsf:latest@sha256:e5d65aec0385810d31ce95d06396b06ed74712d01bb2f0d12bc3deabaf28ccb9
         ports: ["8000:8000"]
         env:
           MOBSF_API_KEY: ci-only-local-key   # yalnızca bu iş içinde, localhost'ta erişilebilir
     env:
       MOBSF_API_KEY: ci-only-local-key
     steps:
-      - uses: actions/checkout@v6
-      - uses: subosito/flutter-action@v2
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           channel: stable
           cache: true
@@ -377,7 +378,7 @@ jobs:
           for item in s.get("high", [])[:15]:
               print(f"- 🟠 {item.get('title')} ({item.get('section', '')})")
           EOF
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: deep-mobsf

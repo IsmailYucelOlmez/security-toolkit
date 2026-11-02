@@ -13,8 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
       - name: Şablondaki pre-commit kopyası güncel mi
@@ -37,6 +37,15 @@ jobs:
           semgrep --validate --metrics=off --config rules/semgrep
       - name: Araç kurulumu çalışıyor mu
         run: bash scripts/install-tools.sh && ~/.security-tools/bin/gitleaks version && ~/.security-tools/bin/osv-scanner --version && ~/.security-tools/bin/trivy --version
+      - name: Özeti tutmayan araç kurulmuyor mu
+        run: |
+          work="$(mktemp -d)"
+          cp scripts/install-tools.sh scripts/requirements-tools.txt "$work/"
+          sed -E 's/ [0-9a-f]{64}$/ '"$(printf '0%.0s' {1..64})"'/' scripts/tool-checksums.txt > "$work/tool-checksums.txt"
+          if SECURITY_TOOLS_DIR="$work/tools" bash "$work/install-tools.sh" --only osv; then
+            echo "::error::Bozuk özetle kurulum başarılı oldu"; exit 1
+          fi
+          test ! -e "$work/tools/bin/osv-scanner"
       - name: Şablon kendi taramasından geçiyor mu
         run: |
           pip install -q copier

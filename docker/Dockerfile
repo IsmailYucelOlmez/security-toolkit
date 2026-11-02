@@ -4,13 +4,9 @@
 #   docker build -f docker/Dockerfile -t security-toolkit .
 #   docker build -f docker/Dockerfile --build-arg WITH_DOTNET=true -t security-toolkit:dotnet .
 #   docker run --rm -v "$PWD:/src" security-toolkit [--fail-on high] [--skip trivy]
-FROM python:3.12-slim-bookworm
+FROM python:3.12-slim-bookworm@sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337
 
 ARG WITH_DOTNET=false
-# Boş bırakılırsa derleme anındaki en son sürümler kurulur; tekrarlanabilir imaj için sabitleyin.
-ARG GITLEAKS_VERSION=""
-ARG OSV_SCANNER_VERSION=""
-ARG TRIVY_VERSION=""
 
 ENV SECURITY_TOOLS_DIR=/opt/security-tools \
     PATH=/opt/security-tools/bin:$PATH \
@@ -33,7 +29,6 @@ COPY rules/ /opt/security-toolkit/rules/
 COPY docker/entrypoint.sh /opt/security-toolkit/docker/entrypoint.sh
 
 RUN extra=(); [ "$WITH_DOTNET" = "true" ] && extra+=(--with-dotnet); \
-    GITLEAKS_VERSION="$GITLEAKS_VERSION" OSV_SCANNER_VERSION="$OSV_SCANNER_VERSION" TRIVY_VERSION="$TRIVY_VERSION" \
     bash /opt/security-toolkit/scripts/install-tools.sh "${extra[@]}" \
  && gitleaks version && osv-scanner --version && trivy --version && bandit --version && semgrep --version \
  && chmod +x /opt/security-toolkit/scripts/*.sh /opt/security-toolkit/docker/entrypoint.sh
