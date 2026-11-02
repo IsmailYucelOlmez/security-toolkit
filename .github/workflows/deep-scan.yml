@@ -11,7 +11,6 @@
 #   TEST_USER_EMAIL, TEST_USER_PASSWORD  login-url verilirse; her iş taramadan önce giriş yapıp taze token alır
 #   API_AUTH_HEADER                 login-url yoksa isteğe bağlı sabit başlık, ör. API anahtarı
 #   STRIX_LLM, LLM_API_KEY          strix için
-#   DEFECTDOJO_URL, DEFECTDOJO_TOKEN isteğe bağlı
 name: deep-scan
 
 on:
@@ -64,10 +63,6 @@ on:
         description: "Flutter projesinin dizini (boşsa MobSF çalışmaz)"
         type: string
         default: ""
-      product-name:
-        description: "DefectDojo ürün adı (boşsa yükleme yapılmaz)"
-        type: string
-        default: ""
       toolkit-repository:
         type: string
         default: ""
@@ -84,10 +79,6 @@ on:
       STRIX_LLM:
         required: false
       LLM_API_KEY:
-        required: false
-      DEFECTDOJO_URL:
-        required: false
-      DEFECTDOJO_TOKEN:
         required: false
       TOOLKIT_TOKEN:
         required: false
@@ -336,30 +327,3 @@ jobs:
           name: deep-mobsf
           path: deep-reports/
           if-no-files-found: ignore
-
-  defectdojo:
-    needs: [guard, zap, mobsf]
-    if: always() && needs.guard.result == 'success' && inputs.product-name != ''
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      DEFECTDOJO_URL: ${{ secrets.DEFECTDOJO_URL }}
-      DEFECTDOJO_TOKEN: ${{ secrets.DEFECTDOJO_TOKEN }}
-    steps:
-      - uses: actions/checkout@v6
-        if: env.DEFECTDOJO_URL != ''
-        with:
-          repository: ${{ inputs.toolkit-repository || format('{0}/security-toolkit', github.repository_owner) }}
-          ref: ${{ inputs.toolkit-ref }}
-          path: .security-toolkit
-          token: ${{ secrets.TOOLKIT_TOKEN || github.token }}
-          persist-credentials: false
-      - uses: actions/download-artifact@v5
-        if: env.DEFECTDOJO_URL != ''
-        with:
-          pattern: deep-*
-          path: reports
-          merge-multiple: true
-      - name: DefectDojo'ya yükle
-        if: env.DEFECTDOJO_URL != ''
-        run: bash .security-toolkit/defectdojo/upload.sh reports --product "${{ inputs.product-name }}" --engagement "Derin tarama"

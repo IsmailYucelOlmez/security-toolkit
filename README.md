@@ -10,7 +10,6 @@ projelerini algılar, uygun araçları çalıştırır, sonuçları tek rapora t
 | **deep-scan** workflow | Haftalık / sürüm öncesi | Staging'e karşı Schemathesis, ZAP, Strix, MobSF |
 | **Docker imajı** | CI olmayan ortamlar | Aynı taramayı tek komutla (fabrika ağı, Windows makineler) |
 | **security-review** skill | İstendiğinde | Bulguları doğrular, araçların kaçırdıklarını arar, düzeltir |
-| **DefectDojo** | Sürekli | Tüm projelerin bulgularını tek panelde toplar |
 
 ## Hangi araç neyi tarar
 
@@ -80,7 +79,6 @@ doğrulanamazsa tarama sonucu şöyle ele alınır:
 | PR yorumu, iş özeti, tarama logu, rapor artifact'i | Bulgu yazılmaz |
 | Security sekmesi (SARIF) | Push, zamanlanmış ve elle başlatılan taramalarda otomatik yüklenir; görünürlük doğrulanamazsa yüklenmez |
 | PR'daki Code Scanning notları | Yüklenmez; okuma yetkisi olan herkes görebilirdi |
-| DefectDojo | Artifact olmadan doğrudan yüklenir |
 | Derin tarama | Çalışmaz, hata verir; çıktıları yalnızca log ve artifact'te tutulur |
 
 PR hâlâ eşik aşılırsa başarısız olur; bu da bulgu olduğunu, ama ayrıntısını değil, herkese gösterir.
@@ -95,7 +93,7 @@ bash scripts/scan.sh --path ~/projeler/rubricator --fail-on high
 
 Çıktılar `security-reports/` altında:
 - `summary.md` — okunabilir özet (private repoda PR yorumunda da bu görünür)
-- `findings.json` — normalize bulgular (skill ve DefectDojo bunu kullanır)
+- `findings.json` — normalize bulgular (skill bunu kullanır)
 - `findings.sarif` — GitHub Security sekmesi için
 - araçların ham çıktıları
 
@@ -135,7 +133,6 @@ tetiklemede seçilebilir (LLM maliyeti nedeniyle). Repo secrets:
 | `TEST_USER_EMAIL`, `TEST_USER_PASSWORD` | `api_login_url` verilirse: Schemathesis ve ZAP taramadan önce giriş yapıp taze token alır |
 | `API_AUTH_HEADER` | Giriş adresi yoksa sabit başlık, ör. API anahtarı |
 | `STRIX_LLM`, `LLM_API_KEY` | Strix |
-| `DEFECTDOJO_URL`, `DEFECTDOJO_TOKEN` | DefectDojo yüklemesi |
 
 Test kullanıcısı için:
 
@@ -150,13 +147,6 @@ Test kullanıcısı için:
 
 > ⚠️ Derin tarama hedefe saldırı trafiği gönderir. Yalnızca kendi staging ortamınızı hedefleyin;
 > workflow `authorized: true` olmadan çalışmaz ve test ortamına benzemeyen adresler için uyarır.
-
-## DefectDojo
-
-Kendi sunucunuzda çalıştırmak için resmi docker-compose kurulumu:
-<https://github.com/DefectDojo/django-DefectDojo> → `docker compose up -d`.
-API token'ı kullanıcı menüsünden alın. `defectdojo/upload.sh` her araç için `reimport-scan`
-kullanır: tekrar eden bulgular birleşir, düzelenler otomatik kapanır.
 
 ## Claude skill'i
 
@@ -176,6 +166,6 @@ araçların kaçırdığı IDOR / yetkilendirme / toplu atama hatalarını elle 
 
 ```bash
 python -m unittest discover tests -v
-shellcheck scripts/*.sh docker/*.sh defectdojo/*.sh
+shellcheck scripts/*.sh docker/*.sh
 actionlint
 ```
