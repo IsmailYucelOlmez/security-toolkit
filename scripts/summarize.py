@@ -32,6 +32,7 @@ TOOL_NAMES = {
     "pip-audit": "pip-audit (Python bağımlılıkları)",
     "bandit": "Bandit (Python SAST)",
     "semgrep": "Semgrep (SAST)",
+    "supabase": "Supabase (RLS, Edge Functions)",
     "trivy": "Trivy (altyapı yapılandırması)",
     "dotnet": "dotnet (NuGet bağımlılıkları)",
     "dependencies": "Bağımlılık kapsamı",
@@ -45,12 +46,13 @@ EXIT_INCOMPLETE = 3  # 2 scan.sh'in kullanım hatasıdır
 INCOMPLETE_STATUSES = {"missing", "error", "partial"}
 # Araç "ok" dese bile bu anahtar yoksa çıktı biçimi değişmiş olabilir; sıfır bulgu sayılmamalı
 REPORT_KEYS = {"osv": "results", "osv-deno": "results", "bandit": "results", "semgrep": "results",
-               "pip-audit": "dependencies", "dotnet": "projects", "sbom": "bomFormat", "zap": "site"}
+               "pip-audit": "dependencies", "dotnet": "projects", "sbom": "bomFormat", "zap": "site",
+               "supabase": "results"}
 REPORT_FILES = {"gitleaks": "gitleaks.json", "osv": "osv.json", "osv-deno": "osv-deno-*.json",
                 "bandit": "bandit.json", "semgrep": "semgrep.json",
                 "trivy": "trivy.json", "pip-audit": "pip-audit-*.json", "dotnet": "dotnet-*.json",
                 "sbom": "sbom.cdx.json", "trivy-image": "trivy-image.json", "zap": "zap.json",
-                "mobsf": "mobsf-scorecard.json"}
+                "mobsf": "mobsf-scorecard.json", "supabase": "supabase.json"}
 ZAP_RISK = {"3": "high", "2": "medium", "1": "low", "0": "info"}
 
 
@@ -131,11 +133,18 @@ def finding(tool, rule_id, severity, title, *, file="", line=None, package="",
 
 
 # ------------------------------------------------------------------ ayrıştırıcılar
+SUPABASE_KEYS = {
+    "anon": ("low", "Supabase anon anahtarı: istemciye verilmek için üretilir, korumayı RLS politikaları sağlar"),
+    "service_role": ("critical", "Supabase service_role anahtarı sızmış: RLS'i atlar, anahtarı hemen yenileyin"),
+}
+
+
 def parse_gitleaks(data, target):
     for r in data or []:
+        severity, title = SUPABASE_KEYS.get(
+            r.get("SupabaseRole"), ("critical", f"Sızdırılmış sır: {r.get('Description') or r.get('RuleID')}"))
         yield finding(
-            "gitleaks", r.get("RuleID", "secret"), "critical",
-            f"Sızdırılmış sır: {r.get('Description') or r.get('RuleID')}",
+            "gitleaks", r.get("RuleID", "secret"), severity, title,
             file=rel(r.get("File"), target), line=r.get("StartLine"),
             ids=[r.get("Fingerprint")],
             detail=f"commit {r['Commit'][:10]}" if r.get("Commit") else "",
@@ -234,6 +243,12 @@ def semgrep_partial_note(data, target) -> str:
     if not paths:
         return ""
     return f"{len(paths)} dosya kısmen ayrıştırılamadı: " + ", ".join(paths[:3]) + ("…" if len(paths) > 3 else "")
+
+
+def parse_supabase(data, target):
+    for r in (data or {}).get("results", []):
+        yield finding("supabase", r.get("rule_id", ""), r.get("severity"), r.get("title", ""),
+                      file=r.get("file", ""), line=r.get("line"))
 
 
 def parse_trivy(data, target):
@@ -610,7 +625,7 @@ def main():
     findings, problems = [], {}
     parsers = [("gitleaks", parse_gitleaks), ("osv", parse_osv), ("bandit", parse_bandit),
                ("semgrep", parse_semgrep), ("trivy", parse_trivy), ("trivy-image", parse_trivy_image),
-               ("zap", parse_zap), ("mobsf", parse_mobsf), ("sbom", lambda data, target: [])]
+               ("zap", parse_zap), ("mobsf", parse_mobsf), ("supabase", parse_supabase), ("sbom", lambda data, target: [])]
     semgrep_note = ""
     for tool, fn in parsers:
         if (out / REPORT_FILES[tool]).exists():

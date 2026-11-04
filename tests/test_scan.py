@@ -167,6 +167,17 @@ class FailClosedTest(unittest.TestCase):
         _, data = self.run_scan("--only", "gitleaks", "--allow-incomplete")
         self.assertIn("python", data["stacks"])
 
+    def test_supabase_check_runs_and_reports(self):
+        mig = self.project / "supabase" / "migrations"
+        mig.mkdir(parents=True)
+        (mig / "1_init.sql").write_text("create table public.notes (id int);\n")
+        proc, data = self.run_scan("--only", "supabase")
+        self.assertIn("supabase", data["stacks"])
+        self.assertEqual(self.tool_status(data, "supabase"), "ok")
+        rules = {(f["rule_id"], f["file"]) for f in data["findings"]}
+        self.assertIn(("supabase-table-without-rls", "supabase/migrations/1_init.sql"), rules)
+        self.assertEqual(proc.returncode, 1)
+
     def test_skipping_osv_disables_coverage_check(self):
         (self.project / "pubspec.yaml").write_text("name: a\n")
         (self.tools / "bin" / "gitleaks").write_text('#!/usr/bin/env bash\necho "[]" > "$(printf "%s\\n" "$@" | sed -n "/gitleaks.json/p")"\n', newline="\n")

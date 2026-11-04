@@ -96,6 +96,10 @@ STACKS=()
 [[ -n "$(find_files pubspec.yaml | head -1)" ]]                    && STACKS+=(flutter)
 [[ -n "$(find_files '*.csproj' '*.sln' '*.slnx' | head -1)" ]]     && STACKS+=(dotnet)
 [[ -n "$(find_files 'package.json' | head -1)" ]]                  && STACKS+=(node)
+# Supabase dizini: config.toml'u veya migration'ları olan her supabase/ klasörü
+mapfile -t SUPABASE_DIRS < <(find_files config.toml '*.sql' | grep -E '/supabase/(config\.toml$|migrations/|schemas/)' \
+  | sed -E 's#/supabase/.*#/supabase#' | sort -u)
+[[ ${#SUPABASE_DIRS[@]} -gt 0 ]]                                   && STACKS+=(supabase)
 # Yalnızca Kubernetes bildirimi veya Helm grafiği içeren depolarda da Trivy çalışmalı
 has_k8s_manifest() {
   local f
@@ -117,7 +121,9 @@ mapfile -t DENO_LOCKS < <(find_files deno.lock)
 if enabled gitleaks; then
   if have gitleaks; then
     log "gitleaks: sızdırılmış sırlar aranıyor"
-    args=(--report-format json --report-path "$OUT/gitleaks.json" --exit-code 0 --no-banner --redact)
+    # Ham rapor sırrı içerir: rapor dizini dışında tutulur, Supabase rolü okunduktan sonra maskelenip silinir
+    raw_dir="$(mktemp -d)"
+    args=(--report-format json --report-path "$raw_dir/gitleaks.json" --exit-code 0 --no-banner)
     # --config projenin kendi dosyasını ezerdi
     [[ -e "$TARGET/.gitleaks.toml" ]] || args+=(--config "$TOOLKIT_DIR/rules/gitleaks.toml")
     if git -C "$TARGET" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -126,7 +132,13 @@ if enabled gitleaks; then
     else
       gitleaks dir "$TARGET" "${args[@]}" >/dev/null 2>"$OUT/gitleaks.log"
     fi
-    [[ $? -eq 0 ]] && status gitleaks ok || status gitleaks error "$(tail -1 "$OUT/gitleaks.log")"
+    rc=$?
+    if [[ $rc -eq 0 ]]; then
+      "$PYTHON" "$TOOLKIT_DIR/scripts/gitleaks_redact.py" "$raw_dir/gitleaks.json" "$OUT/gitleaks.json" 2>>"$OUT/gitleaks.log"
+      rc=$?
+    fi
+    rm -rf "$raw_dir"
+    [[ $rc -eq 0 ]] && status gitleaks ok || status gitleaks error "$(tail -1 "$OUT/gitleaks.log")"
   else status gitleaks missing "gitleaks kurulu değil"; fi
 fi
 
@@ -246,6 +258,15 @@ if enabled semgrep; then
       [[ $rc -le 1 ]] && status semgrep partial "kayıt defteri kuralları atlandı, yalnızca yerel kurallar çalıştı" || status semgrep error "$(semgrep_error)"
     else status semgrep ok; fi
   else status semgrep missing "semgrep kurulu değil"; fi
+fi
+
+# ---------------------------------------------------------------- supabase (RLS politikaları, Edge Functions kimlik doğrulaması)
+if enabled supabase && has_stack supabase; then
+  log "supabase: RLS ve Edge Functions denetimi"
+  if counts="$("$PYTHON" "$TOOLKIT_DIR/scripts/supabase_check.py" "$TARGET" "$OUT/supabase.json" "${SUPABASE_DIRS[@]}" 2>"$OUT/supabase.log")"; then
+    read -r mig_n fn_n <<<"$counts"
+    status supabase ok "$mig_n migration, $fn_n fonksiyon"
+  else status supabase error "$(tail -1 "$OUT/supabase.log")"; fi
 fi
 
 # ---------------------------------------------------------------- trivy (Dockerfile, Terraform, Kubernetes yapılandırması)

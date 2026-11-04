@@ -31,7 +31,24 @@ gömülü API anahtarı, `SharedPreferences`'ta token, `badCertificateCallback`,
 `package.json` algılanır ama Node'a özel araç çalışmaz: kilit dosyaları OSV-Scanner, kod `p/default` kuralları ile taranır.
 `deno.lock` içindeki npm paketleri de taranır ve SBOM'a eklenir; bulgular `deno.lock` konumuyla raporlanır.
 Gitleaks `rules/gitleaks.toml` ile çalışır: Supabase `sb_publishable_` anahtarı sır sayılmaz, `sb_secret_` sayılır.
-Projede `.gitleaks.toml` varsa o kullanılır. Her taramada `sbom.cdx.json` (CycloneDX) üretilir; `--skip sbom` kapatır. Konteyner imajı için `--image REF` (workflow'da
+Eski biçim Supabase JWT'lerinde rol okunur: `anon` anahtarı `low`, `service_role` anahtarı `critical` olarak raporlanır.
+Rol okunduktan sonra sır maskelenir, raporlara hiç yazılmaz. Projede `.gitleaks.toml` varsa o kullanılır.
+
+**Supabase:** `supabase/` klasörü olan projelerde migration'lar dosya adı sırasıyla okunur ve son durum denetlenir.
+Sonradan düzeltilen sorun bulgu sayılmaz.
+
+| Kural | Derece | Ne zaman |
+|---|---|---|
+| `supabase-table-without-rls` | high | `public` tablosunda RLS hiç açılmamış veya sonradan kapatılmış |
+| `supabase-policy-always-true-write` | high | INSERT/UPDATE/DELETE/ALL politikası `using (true)` veya `with check (true)` |
+| `supabase-policy-always-true-select` | low | SELECT politikası `using (true)`; herkese açık veri amaçlandıysa bastırın |
+| `supabase-security-definer-search-path` | medium | `security definer` fonksiyonu `search_path` sabitlemiyor |
+| `supabase-view-security-definer` | medium | `public` görünümü `security_invoker` olmadan tabloların RLS'ini atlıyor |
+| `supabase-materialized-view-public` | medium | `public` şemasında materialized view (RLS uygulanmaz) |
+| `supabase-function-unauthenticated-service-role` | high | `verify_jwt = false`, service_role/secret anahtar kullanılıyor ve kodda çağıranı doğrulayan bir iz yok |
+
+`verify_jwt = false` tek başına bulgu değildir: `sb_publishable_` anahtarları JWT olmadığı için bu ayar gerekir.
+Wildcard CORS da bulgu sayılmaz, çünkü Bearer token kullanan API'lerde tek başına açık değildir. Her taramada `sbom.cdx.json` (CycloneDX) üretilir; `--skip sbom` kapatır. Konteyner imajı için `--image REF` (workflow'da
 `image:`) verin. Trivy, Dockerfile ve Terraform dışında Kubernetes bildirimi ve Helm grafiği içeren depolarda da çalışır.
 
 ## Kurulum (bir kez)
@@ -39,8 +56,8 @@ Projede `.gitleaks.toml` varsa o kullanılır. Her taramada `sbom.cdx.json` (Cyc
 1. Bu klasörü GitHub'da **`security-toolkit`** adlı bir repo olarak yayınlayın. İçinde sır yok;
    **public** olması en kolayı. Private olacaksa projelerde `TOOLKIT_TOKEN` secret'ı gerekir.
 2. `.github/workflows/selftest.yml` ilk push'ta testleri, `docker-publish.yml` imajı GHCR'ye yayınlar.
-3. Kararlı bir sürüm etiketi koyun: `git tag v2.0.1 && git push --tags` (projelerde `@v2.0.1` kullanın).
-   Şablon varsayılan olarak `v2.0.1` kullanır; bu etiket yoksa projelerde tarama başlamaz.
+3. Kararlı bir sürüm etiketi koyun: `git tag v2.0.2 && git push --tags` (projelerde `@v2.0.2` kullanın).
+   Şablon varsayılan olarak `v2.0.2` kullanır; bu etiket yoksa projelerde tarama başlamaz.
 
 ## Bir projeye eklemek
 
@@ -63,6 +80,8 @@ copier recopy -a .security-toolkit-answers.yml --defaults --overwrite
 `copier update` kullanmayın: taşınan sürüm etiketinde eski ve yeni sürümü ayırt edemez, hata vermeden
 hiçbir şey değiştirmez.
 
+**v2.0.2'de davranış değişiklikleri:** `supabase/` klasörü olan projelerde yeni Supabase denetimi çalışır ve RLS bulguları eşiği aşabilir. Eski biçim Supabase `anon` JWT'si artık `critical` değil `low` raporlanır. `deno.lock` taranır.
+
 **v2.0.1'de davranış değişiklikleri:** Eksik tarama artık `3` ile başarısız olur (bkz. Çıkış kodları). `.security-ignore.yml`
 kayıtlarında `reason` ve `expires` zorunludur; eksik kayıtlar bulguyu bastırmaz. PR'da eşik yalnızca yeni bulgulara uygulanır.
 Strix'in doğrulanmış bulgusu işi başarısız yapar. `GITLEAKS_VERSION` gibi sürüm değişkenleri kaldırıldı.
@@ -73,7 +92,7 @@ workflow'uyla birlikte kullanmak çalışmaz. v2.0.1'de Dependabot'a 7 günlük 
 `v2` şablonuyla üretilen projelerin PR'ı bu bulgu yüzünden başarısız olur, güncelleyin.
 
 ```bash
-copier recopy -a .security-toolkit-answers.yml --defaults --overwrite -d toolkit_ref=v2.0.1
+copier recopy -a .security-toolkit-answers.yml --defaults --overwrite -d toolkit_ref=v2.0.2
 ```
 
 **Elle:** `examples/security.yml` dosyasını projenin `.github/workflows/` klasörüne kopyalayın,
@@ -83,7 +102,7 @@ copier recopy -a .security-toolkit-answers.yml --defaults --overwrite -d toolkit
 
 Her proje taramada toolkit'teki kodu çalıştırır; bu yüzden şablon şunları uygular:
 
-- **Sürüm sabitleme:** `toolkit_ref` dal adı kabul etmez. `v2.0.1` gibi bir etiket veya daha sıkı
+- **Sürüm sabitleme:** `toolkit_ref` dal adı kabul etmez. `v2.0.2` gibi bir etiket veya daha sıkı
   sabitleme için tam commit SHA'sı girin. Elle kurulumda `uses: ...@` ve `toolkit-ref` aynı olmalı;
   `toolkit-ref` verilmezse betikler `main`'den gelir.
 - **Yalnızca gereken secret'lar:** `secrets: inherit` kullanılmaz, her secret açıkça aktarılır.
@@ -283,7 +302,11 @@ sohbete yazmayın; `~/.config/security-toolkit/staging-users.env` dosyasına koy
   araç durumu tablosunda yazılır.
 - Gitleaks yalnızca git geçmişini tarar: `.gitignore`'daki `.env` dosyaları görünmez. Flutter `assets:` altına konan böyle bir
   dosya APK'ya girer; bunu derin taramadaki MobSF veya APK'nın elle incelenmesi ortaya çıkarabilir.
-- Eski biçim Supabase `anon` JWT'si (`eyJ...`) Gitleaks'te bulgu olarak kalır; `.security-ignore.yml` ile bastırın.
+- Supabase denetimi SQL'i ayrıştırmaz, ifadeleri düzenli ifadeyle tanır: `DO` bloğu veya dinamik SQL ile açılan RLS,
+  yalnızca panelden yapılan değişiklikler ve `supabase/migrations` dışındaki SQL görünmez. Canlı veritabanının son durumu
+  için Supabase'in kendi Security Advisor'ına da bakın.
+- Edge Functions kontrolündeki "doğrulama izi" (`auth.getUser`, `Authorization` başlığını okuma vb.) yalnızca bir işarettir;
+  izin bulunması doğrulamanın doğru yapıldığını göstermez.
 - Semgrep'in kısmen ayrıştırabildiği dosyalar taramayı eksik saydırmaz, araç durumu tablosunda listelenir.
 
 ## Geliştirme

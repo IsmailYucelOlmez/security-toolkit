@@ -217,6 +217,18 @@ class IncompleteScanTest(unittest.TestCase):
         self.assertEqual(len(data["findings"]), 1)
         self.assertIn("Eşik aşıldı", proc.stdout)
 
+    def test_supabase_role_sets_severity(self):
+        leaks = json.dumps([{"RuleID": "jwt", "File": "a.html", "StartLine": 1, "SupabaseRole": "anon"},
+                            {"RuleID": "jwt", "File": "b.env", "StartLine": 1, "SupabaseRole": "service_role"},
+                            {"RuleID": "jwt", "File": "c.ts", "StartLine": 1}])
+        proc, data = self.summarize([("gitleaks", "ok")], {"gitleaks.json": leaks})
+        by_file = {f["file"]: f for f in data["findings"]}
+        self.assertEqual(by_file["a.html"]["severity"], "low")
+        self.assertEqual(by_file["b.env"]["severity"], "critical")
+        self.assertIn("service_role", by_file["b.env"]["title"])
+        self.assertEqual(by_file["c.ts"]["severity"], "critical")
+        self.assertEqual(proc.returncode, 1)
+
     def test_allow_incomplete_exits_by_threshold_but_still_warns(self):
         proc, data = self.summarize([("semgrep", "missing")], None, "--allow-incomplete")
         self.assertEqual(proc.returncode, 0)
