@@ -68,6 +68,43 @@ class SummarizeTest(unittest.TestCase):
                 self.assertIn("security-severity", rule["properties"])
 
 
+class ParserDetailsTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import summarize
+        cls.s = summarize
+
+    def osv_report(self):
+        vuln = {"id": "GHSA-a", "affected": [{"package": {"name": "form-data"}, "ranges": [{"events": [
+            {"introduced": "0"}, {"fixed": "2.5.6"}, {"introduced": "3.0.0"}, {"fixed": "3.0.5"},
+            {"introduced": "4.0.0"}, {"fixed": "4.0.6"}]}]}]}
+        return {"results": [{"source": {"path": "C:/gecici/package-lock.json"}, "packages": [
+            {"package": {"name": "form-data", "version": "4.0.5"}, "vulnerabilities": [vuln]}]}]}
+
+    def test_fix_version_comes_from_the_installed_branch(self):
+        found = list(self.s.parse_osv(self.osv_report(), Path("."), "supabase/functions/deno.lock"))
+        grouped = self.s.group_by_package(self.s.dedupe(found))
+        self.assertEqual(grouped[0]["fixed_version"], "4.0.6")
+        self.assertEqual(grouped[0]["file"], "supabase/functions/deno.lock")
+
+    def test_nested_semgrep_matches_on_one_line_collapse(self):
+        make = lambda title, line: self.s.finding("semgrep", "r", "low", title, file="a.ts", line=line)
+        out = self.s.dedupe([make("s", 3), make("s.replaceAll()", 3), make("s", 4)])
+        self.assertEqual([f["line"] for f in out], [3, 4])
+
+    def test_gitleaks_matches_on_one_line_stay_separate(self):
+        make = lambda: self.s.finding("gitleaks", "r", "critical", "t", file="a.ts", line=3)
+        self.assertEqual(len(self.s.dedupe([make(), make()])), 2)
+
+    def test_partial_parse_note(self):
+        target = Path(".").resolve()
+        note = self.s.semgrep_partial_note({"errors": [{"path": str(target / "a.yml")}, {"path": str(target / "a.yml")},
+                                                       {"message": "yolsuz"}]}, target)
+        self.assertEqual(note, "1 dosya kısmen ayrıştırılamadı: a.yml")
+        self.assertEqual(self.s.semgrep_partial_note({"errors": []}, target), "")
+
+
 class UnresolvedOsvTest(unittest.TestCase):
     """OSV `>=0.0.9` için 0.0.9'u, pip-audit gerçekten kurulacak sürümü görür."""
 

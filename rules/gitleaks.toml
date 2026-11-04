@@ -1,0 +1,9 @@
+# scan.sh bu yapılandırmayı kullanır; projede .gitleaks.toml varsa gitleaks onunkini okur.
+title = "security-toolkit"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Supabase publishable anahtarı istemciye verilmek için üretilir; sb_secret_ anahtarları bulgu olarak kalır"
+regexes = ['''^sb_publishable_[A-Za-z0-9_-]+$''']

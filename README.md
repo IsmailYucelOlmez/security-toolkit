@@ -16,7 +16,7 @@ projelerini algılar, uygun araçları çalıştırır, sonuçları tek rapora t
 | Araç | Python | Flutter | C# / .NET | Docker / IaC |
 |---|:-:|:-:|:-:|:-:|
 | Gitleaks — sızdırılmış sırlar | ✅ | ✅ | ✅ | ✅ |
-| OSV-Scanner — bağımlılık açıkları (kilit dosyaları) | ✅ | ✅ `pubspec.lock` | ✅ `packages.lock.json` | |
+| OSV-Scanner — bağımlılık açıkları (kilit dosyaları, `deno.lock` dahil) | ✅ | ✅ `pubspec.lock` | ✅ `packages.lock.json` | |
 | pip-audit — `requirements*.txt` | ✅ | | | |
 | Bandit — Python SAST | ✅ | | | |
 | Semgrep — `p/default` + `rules/semgrep` özel kuralları | ✅ | ✅ | ✅ | |
@@ -25,11 +25,13 @@ projelerini algılar, uygun araçları çalıştırır, sonuçları tek rapora t
 
 Özel Semgrep kuralları (`rules/semgrep/`) genel kural setlerinin kaçırdığı kalıpları yakalar:
 FastAPI'de `*` CORS + kimlik bilgisi, debug modu, imzasız JWT, `text(f"...")` SQL; Flutter'da
-gömülü API anahtarı, `SharedPreferences`'ta token, `badCertificateCallback`, şifresiz HTTP;
-C#'ta birleştirmeyle kurulan `SqlCommand` ve bağlantı cümlesinde parola.
+gömülü API anahtarı, `SharedPreferences`'ta token, `badCertificateCallback`, şifresiz HTTP, Android manifestinde
+`usesCleartextTraffic="true"`; C#'ta birleştirmeyle kurulan `SqlCommand` ve bağlantı cümlesinde parola.
 
 `package.json` algılanır ama Node'a özel araç çalışmaz: kilit dosyaları OSV-Scanner, kod `p/default` kuralları ile taranır.
-Her taramada `sbom.cdx.json` (CycloneDX) üretilir; `--skip sbom` kapatır. Konteyner imajı için `--image REF` (workflow'da
+`deno.lock` içindeki npm paketleri de taranır ve SBOM'a eklenir; bulgular `deno.lock` konumuyla raporlanır.
+Gitleaks `rules/gitleaks.toml` ile çalışır: Supabase `sb_publishable_` anahtarı sır sayılmaz, `sb_secret_` sayılır.
+Projede `.gitleaks.toml` varsa o kullanılır. Her taramada `sbom.cdx.json` (CycloneDX) üretilir; `--skip sbom` kapatır. Konteyner imajı için `--image REF` (workflow'da
 `image:`) verin. Trivy, Dockerfile ve Terraform dışında Kubernetes bildirimi ve Helm grafiği içeren depolarda da çalışır.
 
 ## Kurulum (bir kez)
@@ -274,14 +276,21 @@ sohbete yazmayın; `~/.config/security-toolkit/staging-users.env` dosyasına koy
   (workflow'da `skip: dotnet`) ile çalıştırın.
 - Semgrep kural kayıt defterine ulaşamazsa yalnızca yerel kurallarla çalışır, bunu raporda belirtir ve tarama `3`
   döner. Ağsız ortamlarda `--allow-incomplete` kullanın.
-- Kilit dosyası kontrolü `pyproject.toml`, `setup.py`, `Pipfile`, `pubspec.yaml` ve `package.json` dosyalarına bakar;
-  kilit dosyası aynı dizinde veya üst dizinlerde aranır. Bağımlılık tanımlamayan `pyproject.toml` ve `package.json` atlanır.
+- Kilit dosyası kontrolü `pyproject.toml`, `setup.py`, `Pipfile`, `pubspec.yaml`, `package.json` ve `deno.json` dosyalarına
+  bakar; kilit dosyası aynı dizinde veya üst dizinlerde aranır. Bağımlılık tanımlamayan `pyproject.toml`, `package.json` ve
+  `deno.json` atlanır.
+- `deno.lock` içindeki `jsr:` paketleri ve uzak modüller OSV'de karşılık bulmadığı için açık taramasına girmez; sayıları
+  araç durumu tablosunda yazılır.
+- Gitleaks yalnızca git geçmişini tarar: `.gitignore`'daki `.env` dosyaları görünmez. Flutter `assets:` altına konan böyle bir
+  dosya APK'ya girer; bunu derin taramadaki MobSF veya APK'nın elle incelenmesi ortaya çıkarabilir.
+- Eski biçim Supabase `anon` JWT'si (`eyJ...`) Gitleaks'te bulgu olarak kalır; `.security-ignore.yml` ile bastırın.
+- Semgrep'in kısmen ayrıştırabildiği dosyalar taramayı eksik saydırmaz, araç durumu tablosunda listelenir.
 
 ## Geliştirme
 
 ```bash
 python -m unittest discover tests -v
-semgrep --test --metrics=off --config rules/semgrep tests/semgrep
+PYTHONUTF8=1 semgrep --test --metrics=off --config rules/semgrep tests/semgrep  # Windows'ta PYTHONUTF8 olmadan kod sayfası hatası verir
 python tests/contract.py     # install-tools.sh gerekir: gerçek araç çıktılarını sınar
 python tests/e2e_authz.py    # pip install -r scripts/requirements-deep.txt gerekir
 shellcheck scripts/*.sh docker/*.sh
