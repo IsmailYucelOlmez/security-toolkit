@@ -1,0 +1,6 @@
+<manifest>
+    <!-- ruleid: android-cleartext-traffic -->
+    <application android:label="a" android:usesCleartextTraffic="true" />
+    <!-- ok: android-cleartext-traffic -->
+    <application android:label="b" android:usesCleartextTraffic="false" />
+</manifest>

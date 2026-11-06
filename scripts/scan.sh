@@ -91,10 +91,15 @@ find_files() {  # find_files <isim-deseni>...
 
 # ---------------------------------------------------------------- algılama
 STACKS=()
-[[ -n "$(find_files '*.py' | head -1)" ]]                          && STACKS+=(python)
+# Flutter'ın ürettiği ephemeral/flutter_lldb_helper.py projeyi Python sanmamalı
+[[ -n "$(find_files '*.py' | grep -Eiv '/flutter/ephemeral/' | head -1)" ]] && STACKS+=(python)
 [[ -n "$(find_files pubspec.yaml | head -1)" ]]                    && STACKS+=(flutter)
 [[ -n "$(find_files '*.csproj' '*.sln' '*.slnx' | head -1)" ]]     && STACKS+=(dotnet)
 [[ -n "$(find_files 'package.json' | head -1)" ]]                  && STACKS+=(node)
+# Supabase dizini: config.toml'u veya migration'ları olan her supabase/ klasörü
+mapfile -t SUPABASE_DIRS < <(find_files config.toml '*.sql' | grep -E '/supabase/(config\.toml$|migrations/|schemas/)' \
+  | sed -E 's#/supabase/.*#/supabase#' | sort -u)
+[[ ${#SUPABASE_DIRS[@]} -gt 0 ]]                                   && STACKS+=(supabase)
 # Yalnızca Kubernetes bildirimi veya Helm grafiği içeren depolarda da Trivy çalışmalı
 has_k8s_manifest() {
   local f
@@ -110,19 +115,30 @@ log "Hedef: $TARGET"
 log "Algılanan yığınlar: ${STACKS[*]:-(yok)}"
 printf '%s\n' "${STACKS[@]}" > "$OUT/_stacks.txt"
 has_stack() { [[ " ${STACKS[*]} " == *" $1 "* ]]; }
+mapfile -t DENO_LOCKS < <(find_files deno.lock)
 
 # ---------------------------------------------------------------- gitleaks
 if enabled gitleaks; then
   if have gitleaks; then
     log "gitleaks: sızdırılmış sırlar aranıyor"
-    args=(--report-format json --report-path "$OUT/gitleaks.json" --exit-code 0 --no-banner --redact)
+    # Ham rapor sırrı içerir: rapor dizini dışında tutulur, Supabase rolü okunduktan sonra maskelenip silinir
+    raw_dir="$(mktemp -d)"
+    args=(--report-format json --report-path "$raw_dir/gitleaks.json" --exit-code 0 --no-banner)
+    # --config projenin kendi dosyasını ezerdi
+    [[ -e "$TARGET/.gitleaks.toml" ]] || args+=(--config "$TOOLKIT_DIR/rules/gitleaks.toml")
     if git -C "$TARGET" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
       [[ -n "$DIFF_BASE" ]] && args+=(--log-opts="$DIFF_BASE..HEAD")
       gitleaks git "$TARGET" "${args[@]}" >/dev/null 2>"$OUT/gitleaks.log"
     else
       gitleaks dir "$TARGET" "${args[@]}" >/dev/null 2>"$OUT/gitleaks.log"
     fi
-    [[ $? -eq 0 ]] && status gitleaks ok || status gitleaks error "$(tail -1 "$OUT/gitleaks.log")"
+    rc=$?
+    if [[ $rc -eq 0 ]]; then
+      "$PYTHON" "$TOOLKIT_DIR/scripts/gitleaks_redact.py" "$raw_dir/gitleaks.json" "$OUT/gitleaks.json" 2>>"$OUT/gitleaks.log"
+      rc=$?
+    fi
+    rm -rf "$raw_dir"
+    [[ $rc -eq 0 ]] && status gitleaks ok || status gitleaks error "$(tail -1 "$OUT/gitleaks.log")"
   else status gitleaks missing "gitleaks kurulu değil"; fi
 fi
 
@@ -138,6 +154,30 @@ if enabled osv; then
       *) status osv error "çıkış kodu $rc: $(tail -1 "$OUT/osv.log")" ;;
     esac
   else status osv missing "osv-scanner kurulu değil"; fi
+fi
+
+# ---------------------------------------------------------------- deno.lock (OSV-Scanner okumaz; npm paketleri aktarılarak taranır)
+rm -f "$OUT"/osv-deno-*
+if enabled osv && have osv-scanner && [[ ${#DENO_LOCKS[@]} -gt 0 ]]; then
+  log "osv-scanner: deno.lock"
+  i=0; ran=0; bad=(); notes=()
+  for l in "${DENO_LOCKS[@]}"; do
+    lock_rel="${l#"$TARGET"/}"; work="$OUT/_deno-$i"; mkdir -p "$work"
+    if counts="$("$PYTHON" "$TOOLKIT_DIR/scripts/deno_lock.py" npm "$l" "$work/package-lock.json" 2>"$OUT/osv-deno-$i.log")"; then
+      read -r npm_n jsr_n remote_n <<<"$counts"
+      notes+=("$lock_rel: $npm_n npm paketi; $jsr_n jsr ve $remote_n uzak modül OSV kapsamında değil")
+      if [[ $npm_n -gt 0 ]]; then
+        echo "$lock_rel" > "$OUT/osv-deno-$i.source"
+        (cd "$work" && osv-scanner scan source --format json -L package-lock.json) > "$OUT/osv-deno-$i.json" 2>>"$OUT/osv-deno-$i.log"
+        [[ $? -le 1 ]] && ran=1 || bad+=("$lock_rel")
+      fi
+    else bad+=("$lock_rel"); fi
+    rm -rf "$work"  # raporlar projenin içindeyse SBOM bu dosyayı projenin parçası sanmasın
+    i=$((i+1))
+  done
+  if [[ ${#bad[@]} -gt 0 ]]; then status osv-deno error "taranamadı: ${bad[*]}, osv-deno-*.log'a bakın"
+  elif (( ran )); then status osv-deno ok "${notes[*]}"
+  else status osv-deno skipped "${notes[*]}"; fi
 fi
 
 # ---------------------------------------------------------------- bağımlılık kapsamı
@@ -163,9 +203,10 @@ if enabled osv; then
       Pipfile) locks=("${PY_LOCKS[@]}") ;;
       pubspec.yaml) locks=(pubspec.lock) ;;
       package.json) grep -q 'ependencies"' "$m" && locks=(package-lock.json yarn.lock pnpm-lock.yaml bun.lock) ;;
+      deno.json|deno.jsonc) grep -q '"imports"' "$m" && locks=(deno.lock) ;;
     esac
     [[ ${#locks[@]} -gt 0 ]] && ! has_nearby "$(dirname "$m")" "${locks[@]}" && uncovered+=("${m#"$TARGET"/}")
-  done < <(find_files pyproject.toml setup.py Pipfile pubspec.yaml package.json)
+  done < <(find_files pyproject.toml setup.py Pipfile pubspec.yaml package.json deno.json deno.jsonc)
   if [[ ${#uncovered[@]} -gt 0 ]]; then
     status dependencies error "kilit dosyası olmadığı için taranmadı: ${uncovered[*]:0:5}"
   fi
@@ -219,6 +260,15 @@ if enabled semgrep; then
   else status semgrep missing "semgrep kurulu değil"; fi
 fi
 
+# ---------------------------------------------------------------- supabase (RLS politikaları, Edge Functions kimlik doğrulaması)
+if enabled supabase && has_stack supabase; then
+  log "supabase: RLS ve Edge Functions denetimi"
+  if counts="$("$PYTHON" "$TOOLKIT_DIR/scripts/supabase_check.py" "$TARGET" "$OUT/supabase.json" "${SUPABASE_DIRS[@]}" 2>"$OUT/supabase.log")"; then
+    read -r mig_n fn_n <<<"$counts"
+    status supabase ok "$mig_n migration, $fn_n fonksiyon"
+  else status supabase error "$(tail -1 "$OUT/supabase.log")"; fi
+fi
+
 # ---------------------------------------------------------------- trivy (Dockerfile, Terraform, Kubernetes yapılandırması)
 if enabled trivy && has_stack infra; then
   if have trivy; then
@@ -244,7 +294,13 @@ if enabled sbom; then
     log "sbom: bileşen listesi"
     trivy fs --quiet --format cyclonedx --output "$OUT/sbom.cdx.json" \
       --skip-dirs "**/node_modules" --skip-dirs "**/.venv" "$TARGET" 2>"$OUT/sbom.log"
-    [[ $? -eq 0 ]] && status sbom ok || status sbom error "$(tail -1 "$OUT/sbom.log")"
+    rc=$?
+    # Trivy deno.lock okumaz
+    if [[ $rc -eq 0 && ${#DENO_LOCKS[@]} -gt 0 ]]; then
+      "$PYTHON" "$TOOLKIT_DIR/scripts/deno_lock.py" sbom "$OUT/sbom.cdx.json" "${DENO_LOCKS[@]}" 2>>"$OUT/sbom.log"
+      rc=$?
+    fi
+    [[ $rc -eq 0 ]] && status sbom ok || status sbom error "$(tail -1 "$OUT/sbom.log")"
   else status sbom missing "trivy kurulu değil"; fi
 fi
 

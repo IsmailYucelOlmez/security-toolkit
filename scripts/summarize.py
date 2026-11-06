@@ -28,9 +28,11 @@ EMOJI = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "🔵", "i
 TOOL_NAMES = {
     "gitleaks": "Gitleaks (sırlar)",
     "osv": "OSV-Scanner (bağımlılıklar)",
+    "osv-deno": "OSV-Scanner (deno.lock)",
     "pip-audit": "pip-audit (Python bağımlılıkları)",
     "bandit": "Bandit (Python SAST)",
     "semgrep": "Semgrep (SAST)",
+    "supabase": "Supabase (RLS, Edge Functions)",
     "trivy": "Trivy (altyapı yapılandırması)",
     "dotnet": "dotnet (NuGet bağımlılıkları)",
     "dependencies": "Bağımlılık kapsamı",
@@ -43,12 +45,14 @@ EXIT_THRESHOLD = 1
 EXIT_INCOMPLETE = 3  # 2 scan.sh'in kullanım hatasıdır
 INCOMPLETE_STATUSES = {"missing", "error", "partial"}
 # Araç "ok" dese bile bu anahtar yoksa çıktı biçimi değişmiş olabilir; sıfır bulgu sayılmamalı
-REPORT_KEYS = {"osv": "results", "bandit": "results", "semgrep": "results",
-               "pip-audit": "dependencies", "dotnet": "projects", "sbom": "bomFormat", "zap": "site"}
-REPORT_FILES = {"gitleaks": "gitleaks.json", "osv": "osv.json", "bandit": "bandit.json", "semgrep": "semgrep.json",
+REPORT_KEYS = {"osv": "results", "osv-deno": "results", "bandit": "results", "semgrep": "results",
+               "pip-audit": "dependencies", "dotnet": "projects", "sbom": "bomFormat", "zap": "site",
+               "supabase": "results"}
+REPORT_FILES = {"gitleaks": "gitleaks.json", "osv": "osv.json", "osv-deno": "osv-deno-*.json",
+                "bandit": "bandit.json", "semgrep": "semgrep.json",
                 "trivy": "trivy.json", "pip-audit": "pip-audit-*.json", "dotnet": "dotnet-*.json",
                 "sbom": "sbom.cdx.json", "trivy-image": "trivy-image.json", "zap": "zap.json",
-                "mobsf": "mobsf-scorecard.json"}
+                "mobsf": "mobsf-scorecard.json", "supabase": "supabase.json"}
 ZAP_RISK = {"3": "high", "2": "medium", "1": "low", "0": "info"}
 
 
@@ -129,11 +133,18 @@ def finding(tool, rule_id, severity, title, *, file="", line=None, package="",
 
 
 # ------------------------------------------------------------------ ayrıştırıcılar
+SUPABASE_KEYS = {
+    "anon": ("low", "Supabase anon anahtarı: istemciye verilmek için üretilir, korumayı RLS politikaları sağlar"),
+    "service_role": ("critical", "Supabase service_role anahtarı sızmış: RLS'i atlar, anahtarı hemen yenileyin"),
+}
+
+
 def parse_gitleaks(data, target):
     for r in data or []:
+        severity, title = SUPABASE_KEYS.get(
+            r.get("SupabaseRole"), ("critical", f"Sızdırılmış sır: {r.get('Description') or r.get('RuleID')}"))
         yield finding(
-            "gitleaks", r.get("RuleID", "secret"), "critical",
-            f"Sızdırılmış sır: {r.get('Description') or r.get('RuleID')}",
+            "gitleaks", r.get("RuleID", "secret"), severity, title,
             file=rel(r.get("File"), target), line=r.get("StartLine"),
             ids=[r.get("Fingerprint")],
             detail=f"commit {r['Commit'][:10]}" if r.get("Commit") else "",
@@ -141,20 +152,22 @@ def parse_gitleaks(data, target):
 
 
 def _osv_fixed(vulns, pkg_name):
+    """Her sürüm dalının düzeltmesi; mevcut sürüme uyanı best_fix seçer."""
+    fixes = []
     for v in vulns:
         for aff in v.get("affected", []):
             if aff.get("package", {}).get("name", "").lower() != pkg_name.lower():
                 continue
             for rng in aff.get("ranges", []):
                 for ev in rng.get("events", []):
-                    if ev.get("fixed"):
-                        return ev["fixed"]
-    return ""
+                    if ev.get("fixed") and ev["fixed"] not in fixes:
+                        fixes.append(ev["fixed"])
+    return ", ".join(fixes)
 
 
-def parse_osv(data, target):
+def parse_osv(data, target, source=""):
     for res in (data or {}).get("results", []):
-        src = rel(res.get("source", {}).get("path"), target)
+        src = source or rel(res.get("source", {}).get("path"), target)
         for pkg in res.get("packages", []):
             info = pkg.get("package", {})
             vulns = {v["id"]: v for v in pkg.get("vulnerabilities", [])}
@@ -222,6 +235,20 @@ def parse_semgrep(data, target):
             ids=[c.split(":")[0] for c in cwes],
             url=(meta.get("references") or [""])[0] if isinstance(meta.get("references"), list) else "",
         )
+
+
+def semgrep_partial_note(data, target) -> str:
+    """Kısmen okunan dosya taramayı eksik saydırmaz ama "ok" satırında görünmeli."""
+    paths = sorted({rel(e["path"], target) for e in (data or {}).get("errors", []) if e.get("path")})
+    if not paths:
+        return ""
+    return f"{len(paths)} dosya kısmen ayrıştırılamadı: " + ", ".join(paths[:3]) + ("…" if len(paths) > 3 else "")
+
+
+def parse_supabase(data, target):
+    for r in (data or {}).get("results", []):
+        yield finding("supabase", r.get("rule_id", ""), r.get("severity"), r.get("title", ""),
+                      file=r.get("file", ""), line=r.get("line"))
 
 
 def parse_trivy(data, target):
@@ -322,14 +349,20 @@ def drop_unresolved_osv(findings, resolved):
 
 
 def dedupe(findings):
-    """Aynı paket+açık birden çok araçtan gelirse tek kayda indirger, en yüksek dereceyi tutar."""
-    out, index = [], {}
+    """Aynı paket sürümü+açık birden çok araçtan gelirse tek kayda indirger, en yüksek dereceyi tutar."""
+    out, index, sites = [], {}, set()
     for f in findings:
+        # Semgrep iç içe .replaceAll() zincirinde aynı satırı her çağrı için ayrı raporlar
+        if f["tool"] == "semgrep":
+            site = (f["rule_id"], f["file"], f["line"])
+            if site in sites:
+                continue
+            sites.add(site)
         f = {**f, "also_found_by": [], "locations": [f["file"]] if f["file"] else []}
         if not (f["package"] and f["ids"]):
             out.append(f)
             continue
-        pkg = norm_pkg(f["package"])
+        pkg = (norm_pkg(f["package"]), f["version"])  # farklı sürümlerin düzeltmesi de ayrıdır
         hit = next((index[(pkg, i)] for i in f["ids"] if (pkg, i) in index), None)
         if hit is None:
             out.append(f)
@@ -592,14 +625,24 @@ def main():
     findings, problems = [], {}
     parsers = [("gitleaks", parse_gitleaks), ("osv", parse_osv), ("bandit", parse_bandit),
                ("semgrep", parse_semgrep), ("trivy", parse_trivy), ("trivy-image", parse_trivy_image),
-               ("zap", parse_zap), ("mobsf", parse_mobsf), ("sbom", lambda data, target: [])]
+               ("zap", parse_zap), ("mobsf", parse_mobsf), ("supabase", parse_supabase), ("sbom", lambda data, target: [])]
+    semgrep_note = ""
     for tool, fn in parsers:
         if (out / REPORT_FILES[tool]).exists():
-            findings += read_report(out / REPORT_FILES[tool], tool, fn, target, problems)[1]
+            data, items = read_report(out / REPORT_FILES[tool], tool, fn, target, problems)
+            findings += items
+            if tool == "semgrep":
+                semgrep_note = semgrep_partial_note(data, target)
+
+    def source_of(report):
+        src = Path(report).with_suffix(".source")
+        return src.read_text(encoding="utf-8").strip() if src.exists() else ""
+
+    for p in sorted(glob.glob(str(out / "osv-deno-*.json"))):
+        findings += read_report(Path(p), "osv-deno", parse_osv, target, problems, source_of(p))[1]
     resolved = {}
     for p in sorted(glob.glob(str(out / "pip-audit-*.json"))):
-        src = Path(p).with_suffix(".source")
-        source = src.read_text(encoding="utf-8").strip() if src.exists() else ""
+        source = source_of(p)
         data, items = read_report(Path(p), "pip-audit", parse_pip_audit, target, problems, source)
         findings += items
         resolved[source] = {norm_pkg(d["name"]): d["version"] for d in (data or {}).get("dependencies", []) if d.get("version")}
@@ -637,7 +680,8 @@ def main():
         if st in ("ok", "partial") and tool in REPORT_FILES and not glob.glob(str(out / REPORT_FILES[tool])):
             problems.setdefault(tool, "rapor dosyası oluşmadı")
     seen = {t for t, _, _ in statuses}
-    statuses = [(t, "error", problems[t]) if t in problems else (t, st, n) for t, st, n in statuses]
+    statuses = [(t, "error", problems[t]) if t in problems
+                else (t, st, semgrep_note) if t == "semgrep" and st == "ok" else (t, st, n) for t, st, n in statuses]
     statuses += [(t, "error", note) for t, note in problems.items() if t not in seen]
     incomplete = [row for row in statuses if row[1] in INCOMPLETE_STATUSES]
     stacks = (out / "_stacks.txt").read_text().split() if (out / "_stacks.txt").exists() else []

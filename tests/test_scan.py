@@ -123,6 +123,61 @@ class FailClosedTest(unittest.TestCase):
         _, data = self.run_scan("--only", "gitleaks", "--allow-incomplete")
         self.assertNotIn("infra", data["stacks"])
 
+    def test_deno_lock_is_scanned_and_reported_with_its_own_path(self):
+        self.stub_osv(0)
+        funcs = self.project / "supabase" / "functions"
+        funcs.mkdir(parents=True)
+        (funcs / "deno.json").write_text('{"imports": {"a": "npm:a@1"}}\n')
+        (funcs / "deno.lock").write_text('{"version": "5", "npm": {"a@1.0.0": {}}, "jsr": {"@std/assert@1.0.0": {}}}')
+        proc, data = self.run_scan("--only", "osv")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        row = next(t for t in data["tools"] if t["tool"] == "osv-deno")
+        self.assertEqual(row["status"], "ok")
+        self.assertIn("supabase/functions/deno.lock: 1 npm paketi; 1 jsr", row["note"])
+        self.assertFalse(list((self.project / "security-reports").glob("_deno-*")), "geçici dizin kalmamalı")
+
+    def test_unreadable_deno_lock_is_incomplete(self):
+        self.stub_osv(0)
+        (self.project / "deno.lock").write_text('{"version": "2"}')
+        proc, data = self.run_scan("--only", "osv")
+        self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
+        self.assertEqual(self.tool_status(data, "osv-deno"), "error")
+
+    def test_osv_failure_on_deno_lock_is_incomplete(self):
+        self.stub_osv(127)
+        (self.project / "deno.lock").write_text('{"version": "5", "npm": {"a@1.0.0": {}}}')
+        proc, data = self.run_scan("--only", "osv")
+        self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
+        self.assertEqual(self.tool_status(data, "osv-deno"), "error")
+
+    def test_deno_json_without_lock_is_incomplete(self):
+        self.stub_osv(128)
+        (self.project / "deno.json").write_text('{"imports": {"a": "npm:a@1"}}\n')
+        proc, data = self.run_scan("--only", "osv")
+        self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
+        self.assertEqual(self.tool_status(data, "dependencies"), "error")
+
+    def test_flutter_generated_python_is_not_python_stack(self):
+        helper = self.project / "ios" / "Flutter" / "ephemeral"
+        helper.mkdir(parents=True)
+        (helper / "flutter_lldb_helper.py").write_text("print(1)\n")
+        _, data = self.run_scan("--only", "gitleaks", "--allow-incomplete")
+        self.assertNotIn("python", data["stacks"])
+        (self.project / "app.py").write_text("print(1)\n")
+        _, data = self.run_scan("--only", "gitleaks", "--allow-incomplete")
+        self.assertIn("python", data["stacks"])
+
+    def test_supabase_check_runs_and_reports(self):
+        mig = self.project / "supabase" / "migrations"
+        mig.mkdir(parents=True)
+        (mig / "1_init.sql").write_text("create table public.notes (id int);\n")
+        proc, data = self.run_scan("--only", "supabase")
+        self.assertIn("supabase", data["stacks"])
+        self.assertEqual(self.tool_status(data, "supabase"), "ok")
+        rules = {(f["rule_id"], f["file"]) for f in data["findings"]}
+        self.assertIn(("supabase-table-without-rls", "supabase/migrations/1_init.sql"), rules)
+        self.assertEqual(proc.returncode, 1)
+
     def test_skipping_osv_disables_coverage_check(self):
         (self.project / "pubspec.yaml").write_text("name: a\n")
         (self.tools / "bin" / "gitleaks").write_text('#!/usr/bin/env bash\necho "[]" > "$(printf "%s\\n" "$@" | sed -n "/gitleaks.json/p")"\n', newline="\n")

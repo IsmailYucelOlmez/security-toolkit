@@ -39,6 +39,18 @@ rules:
     metadata: {cwe: ['CWE-295: Improper Certificate Validation'], category: security, confidence: HIGH, impact: HIGH}
     pattern-regex: "badCertificateCallback\\s*=\\s*\\([^)]*\\)\\s*=>\\s*true"
 
+  - id: android-cleartext-traffic
+    languages: [generic]
+    paths:
+      include: ["*.xml"]
+      exclude: ["*/debug/*", "*/profile/*"]  # Flutter'ın geliştirme manifestleri
+    severity: WARNING
+    message: >-
+      Android manifesti şifresiz HTTP trafiğine izin veriyor. Yalnızca geliştirme için gerekiyorsa
+      src/debug/AndroidManifest.xml dosyasına taşıyın veya networkSecurityConfig ile adresle sınırlayın.
+    metadata: {cwe: ['CWE-319: Cleartext Transmission of Sensitive Information'], category: security, confidence: HIGH, impact: MEDIUM}
+    pattern-regex: "android:usesCleartextTraffic\\s*=\\s*[\"']true[\"']"
+
   # ------------------------------------------------------------------ C# / .NET
   - id: csharp-sql-string-concat
     languages: [csharp]
